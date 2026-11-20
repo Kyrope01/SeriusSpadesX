@@ -1166,13 +1166,22 @@ struct Server::Impl {
                 }
             }
         }
-        if (world_time - p.walk_ref_at >= 0.8) {
-            const bool stuck = near3(p.body.pos, p.walk_ref, 0.8f);
-            if (stuck) {
-                p.input.jump = true;
+        // The unstick. Progress is measured flat, over the ground it stands
+        // on: a hop against a wall gains none, so the spade does not wait on
+        // where in its bounce the clock samples it, and a wall of six costs
+        // a few seconds of swinging, not a pack parked forever.
+        if (world_time - p.walk_ref_at >= 0.5) {
+            const float moved = std::fabs(p.body.pos.x - p.walk_ref.x) +
+                                std::fabs(p.body.pos.y - p.walk_ref.y);
+            p.walk_ref = p.body.pos;
+            p.walk_ref_at = world_time;
+            if (moved < 0.35f) {
                 if (p.stuck_at < 0.0) p.stuck_at = world_time;
-                // Jumped for this long without moving: swing at the way in.
-                if (world_time - p.stuck_at >= 1.2 && world_time >= p.dig_at) {
+                p.input.jump = true;
+                // A second of hopping that bought no ground: swing at the
+                // way in. The field still says where the way in lies, and
+                // the swing takes the front column down a block at a time.
+                if (world_time - p.stuck_at >= 1.0 && world_time >= p.dig_at) {
                     if (dig_ahead(p)) {
                         p.dig_at = world_time + 0.5;
                         show_swing(p, 0.35);
@@ -1183,8 +1192,6 @@ struct Server::Impl {
             } else {
                 p.stuck_at = -1.0;
             }
-            p.walk_ref = p.body.pos;
-            p.walk_ref_at = world_time;
         }
     }
     // Teeth: the core first, any person in reach second. A bite a second.

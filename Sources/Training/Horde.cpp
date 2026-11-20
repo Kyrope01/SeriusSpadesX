@@ -248,9 +248,11 @@ bool Horde::near_core(int x, int y, int cells) const {
 // --- the veto ----------------------------------------------------------------
 
 // Two floods, one with the candidate column held out. The map is not touched
-// here: the candidate only hides that column from the walk. The field comes
-// out of it freshly computed either way (the same work the debounce would
-// soon do), so a refused block leaves a working field for the next question.
+// here: the candidate only hides that column from the walk. Both questions
+// and the field all come out of it freshly computed (the same work the
+// debounce would soon do), so a refused block answers the next veto with a
+// working field, and the zombies' field keeps the spade's prices instead of
+// the strict ones the veto just asked with.
 bool Horde::can_build(int x, int y, int z) {
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return true;
     if (z < 0 || z >= SolidMap::SIZE_Z) return true;
@@ -258,8 +260,8 @@ bool Horde::can_build(int x, int y, int z) {
     flood(with_block, x, y, false);
     std::vector<int32_t> without_block;
     flood(without_block, -1, -1, false);
-    dist_ = without_block;  // refreshed while we are here
-    field_dirty_ = false;   // its own ground cache, its own flood: consistent
+    flood(dist_, -1, -1, true);  // the walk's answer, not the veto's
+    field_dirty_ = false;
     if (reach_spawn(with_block)) return true;
     // Fail open: sealed before this block too - the tower stands or falls on
     // its own, refusing nothing that changes nothing.

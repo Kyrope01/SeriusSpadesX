@@ -31,12 +31,23 @@ size_t cell_index(int x, int y) {
 int ground_of(uint64_t col) {
     if (col == 0) return -1;  // a column of nothing: no ground to stand on
     // The topmost solid z: the least significant set bit.
-#if defined(_MSC_VER)
+#if !defined(_MSC_VER)
+    return static_cast<int>(__builtin_ctzll(col));
+#elif defined(_M_X64) || defined(_M_ARM64) || defined(_M_ARM64EC)
     unsigned long z = 0;
     _BitScanForward64(&z, col);
     return static_cast<int>(z);
 #else
-    return static_cast<int>(__builtin_ctzll(col));
+    // 32-bit MSVC has no 64-bit scan intrinsic: scan the low half,
+    // and only when it is empty the high half.
+    unsigned long z = 0;
+    if ((col & 0xffffffffu) != 0)
+        _BitScanForward(&z, static_cast<unsigned long>(col));
+    else {
+        _BitScanForward(&z, static_cast<unsigned long>(col >> 32));
+        z += 32;
+    }
+    return static_cast<int>(z);
 #endif
 }
 

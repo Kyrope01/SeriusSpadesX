@@ -78,7 +78,7 @@ bool Horde::walkable(int x, int y) {
     const int g = ground(x, y);
     if (g < 2) return false;  // no ground, or no headroom above it
     const uint64_t col = map_.column(x, y);
-    return ((col >> (g - 1)) & 3u) == 0;  // the two voxels above are open
+    return ((col >> (g - 2)) & 3u) == 0;  // the two voxels above the ground
 }
 
 // --- the field ---------------------------------------------------------------

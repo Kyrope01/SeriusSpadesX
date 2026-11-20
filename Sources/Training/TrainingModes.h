@@ -11,7 +11,9 @@
 
 namespace training {
 
-enum class Mode { Tutorial = 0, Aim = 1 };
+// Horde: waves of the walking dead against a core (Horde.h holds the
+// brain), the map everywhere flat outside the course's corridor.
+enum class Mode { Tutorial = 0, Aim = 1, Horde = 2 };
 
 enum class Scenario {
     Gridshot = 0,  // three still targets on stands; each one shot is replaced

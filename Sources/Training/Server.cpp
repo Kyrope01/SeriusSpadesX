@@ -1,6 +1,7 @@
 #include "Server.h"
 
 #include "Grenade.h"
+#include "Horde.h"
 #include "MapGen.h"
 #include "Physics.h"
 #include "Protocol.h"
@@ -286,6 +287,14 @@ struct Player {
     int pinged_step = -1;
     bool lamp = false;             // its flashlight is lit
 
+    // Horde: one of the wave's walkers. Horde.h holds the brain, this holds
+    // its legs and its teeth.
+    bool zombie = false;
+    double next_bite = 0.0;      // a bite a second once it has one to bite
+    Vec3 walk_ref{};             // where it last stood, to catch a stuck one
+    double walk_ref_at = 0.0;
+    double free_slot_at = 0.0;   // dead: when its slot goes back to the wave
+
     bool spectator() const { return team == -1; }
     bool playing() const { return named && (team == 0 || team == 1); }
 };
@@ -395,6 +404,13 @@ struct Server::Impl {
         map.to_solid_map(phys_map);
     }
     bool aim_mode() const { return cfg.mode == training::Mode::Aim; }
+    bool horde_mode() const { return cfg.mode == training::Mode::Horde; }
+    // The horde's brain, and what its host remembers between its ticks.
+    horde::Config horde_cfg;
+    std::unique_ptr<horde::Horde> horde;
+    horde::Phase horde_told = horde::Phase::Prep;
+    int horde_wave_told = 0;
+    double core_alarm_at = 0.0;   // "under attack": one line every few seconds
     void serve_maps() {
         if (job_running && job_done.load()) {
             map_job.join();
@@ -429,7 +445,9 @@ struct Server::Impl {
     }
     void touched(const std::vector<Cell>& cells, bool solid) {
         for (const Cell& c : cells) phys_map.set_block(c.x, c.y, c.z, solid);
-        if (!cells.empty()) ++map_rev;
+        if (cells.empty()) return;
+        ++map_rev;
+        if (horde) horde->on_map_edited();   // the field follows every edit
     }
 
     // pyspades get_random_location: a land column in the box, on its top.
@@ -450,7 +468,7 @@ struct Server::Impl {
         write_color(bw, team_color[0]);
         write_color(bw, team_color[1]);
         bw.write_fixed_string("Blue", 10);
-        bw.write_fixed_string("Green", 10);
+        bw.write_fixed_string(horde_mode() ? "Zombies" : "Green", 10);
         bw.write_u8(1);
         bw.write_u8(0);
         for (size_t i = 0; i < 16; ++i)
@@ -576,7 +594,7 @@ struct Server::Impl {
     // full on the client too). Only when nearly out, since a restock plays its
     // sound; not in the middle of a reload, which carries on with what it had.
     void keep_stocked(Player& p) {
-        if (!p.peer || !p.alive || p.aim_bot || p.gun.reloading) return;
+        if (!p.peer || !p.alive || p.aim_bot || p.zombie || p.gun.reloading) return;
         const bool low = p.gun.stock <= p.gun.spec().clip || p.grenades <= 0 || p.blocks <= 10;
         if (!low || world_time - p.last_restock < 1.5) return;
         p.last_restock = world_time;
@@ -589,7 +607,11 @@ struct Server::Impl {
 
     // A target on its lane of the range, a person at the start.
     Vec3 spawn_location(Player& p) {
+        if (p.zombie && p.has_spawn_at) return p.spawn_at;
         if (p.aim_bot && p.has_spawn_at) return p.spawn_at;
+        if (horde_mode())
+            return random_location(horde_cfg.core_x - 2, horde_cfg.core_y - 2,
+                                   horde_cfg.core_x + 3, horde_cfg.core_y + 3);
         if (aim_mode() && !p.aim_bot)
             return Vec3{static_cast<float>(training::kAimSpawnX), static_cast<float>(training::kAimSpawnY),
                         static_cast<float>(map.get_z(training::kAimSpawnX, training::kAimSpawnY))};
@@ -621,6 +643,7 @@ struct Server::Impl {
             p.input = physics::Input{};
             p.alive = true;
             p.tool = kToolWeapon;
+            if (p.zombie) p.tool = kToolSpade;   // it never fires a shot
             p.gun.reset();
             refill(p);
             bw.write_vec(at);
@@ -636,6 +659,9 @@ struct Server::Impl {
             p.home_y = p.body.pos.y;
             p.strafe_until = 0;
             if (cfg.highlight_targets) send_mark(p);
+        } else if (p.zombie) {
+            p.walk_ref = p.body.pos;
+            p.walk_ref_at = world_time;
         }
     }
 
@@ -649,6 +675,7 @@ struct Server::Impl {
 
     void kill(Player& p, Player* by, int kill_type) {
         if (!p.alive) return;
+        if (p.zombie && horde) horde->on_zombie_killed();
         if (p.aim_bot) {
             if (by && !by->aim_bot && aim.phase == training::AimPhase::Running) {
                 aim.kills += 1;
@@ -661,7 +688,8 @@ struct Server::Impl {
         p.hp = 0;
         p.gun.reset();
         p.lamp = false; // every client puts it out on the Kill Action
-        const float delay = respawn_seconds(p);
+        float delay = respawn_seconds(p);
+        if (p.zombie) delay = 2.0f;   // its slot is freed, not a respawn
         ByteWriter bw;
         bw.write_u8(static_cast<uint8_t>(PacketId::KillAction));
         bw.write_u8(static_cast<uint8_t>(p.id));
@@ -670,7 +698,12 @@ struct Server::Impl {
         bw.write_u8(static_cast<uint8_t>(std::min(255, static_cast<int>(delay) + 1)));
         broadcast(bw, true);
         if (by && by != &p) by->kills += 1;
-        p.respawn_at = world_time + delay;
+        if (p.zombie) {
+            p.respawn_at = -1;
+            p.free_slot_at = world_time + delay;
+        } else {
+            p.respawn_at = world_time + delay;
+        }
     }
 
     void set_hp(Player& p, int value, Player* by, int kill_type, const Vec3* source) {
@@ -868,6 +901,130 @@ struct Server::Impl {
             default: break;  // still
         }
     }
+    // --- the horde ---------------------------------------------------------
+    // The brain's body: the players whose walk and fall it counts. A zombie
+    // is a player like a range target is, with no connection behind it.
+    void add_zombie(const horde::SpawnAt& at) {
+        int id = -1;
+        for (int i = 0; i < kSlots && id < 0; ++i)
+            if (!players[i]) id = i;
+        if (id < 0) {
+            horde->on_zombie_killed();   // nowhere to stand: the wave skipped it
+            return;
+        }
+        auto p = std::make_unique<Player>();
+        p->id = id;
+        p->named = true;
+        p->name = "Zombie";
+        p->team = kTargets;
+        p->zombie = true;
+        p->client_info = true;
+        p->has_spawn_at = true;
+        p->spawn_at = Vec3{static_cast<float>(at.x), static_cast<float>(at.y),
+                           static_cast<float>(at.z)};
+        players[id] = std::move(p);
+        ++bot_count;
+        spawn(*players[id]);
+    }
+    // The fallen keep their slot a moment so their fall is seen, then the rest
+    // of the wave may have it.
+    void free_dead_zombies() {
+        for (auto& pp : players) {
+            if (!pp || !pp->zombie || pp->alive || pp->free_slot_at <= 0) continue;
+            if (world_time >= pp->free_slot_at) {
+                pp.reset();
+                --bot_count;
+            }
+        }
+    }
+    // A zombie's mind: step where the field says, towards the core. A stuck
+    // one (a ledge, a wall's foot) nudges itself with a jump now and then.
+    void steer_zombie(Player& p) {
+        p.input = physics::Input{};
+        const int cx = static_cast<int>(std::floor(p.body.pos.x));
+        const int cy = static_cast<int>(std::floor(p.body.pos.y));
+        if (horde->near_core(cx, cy, 2)) return;   // it bites, it does not walk
+        int tx = cx, ty = cy;
+        if (horde->next_step(cx, cy, tx, ty)) {
+            const float dx = static_cast<float>(tx) - p.body.pos.x;
+            const float dy = static_cast<float>(ty) - p.body.pos.y;
+            const float l = std::sqrt(dx * dx + dy * dy);
+            if (l > 1e-3f) {
+                p.body.ori = Vec3{dx / l, dy / l, 0.0f};
+                p.input.mf = true;
+            }
+        }
+        if (world_time - p.walk_ref_at >= 0.8) {
+            if (near3(p.body.pos, p.walk_ref, 0.8f)) p.input.jump = true;
+            p.walk_ref = p.body.pos;
+            p.walk_ref_at = world_time;
+        }
+    }
+    // Teeth: the core first, any person in reach second. A bite a second.
+    void zombie_bite(Player& p) {
+        if (world_time < p.next_bite) return;
+        const int cx = static_cast<int>(std::floor(p.body.pos.x));
+        const int cy = static_cast<int>(std::floor(p.body.pos.y));
+        bool bit = false;
+        if (horde->near_core(cx, cy, 2)) {
+            horde->on_core_damaged(10);
+            bit = true;
+            if (world_time >= core_alarm_at) {
+                core_alarm_at = world_time + 4.0;
+                char text[96];
+                std::snprintf(text, sizeof text, "The core is under attack! Core %d",
+                             horde->core_hp());
+                system_chat(text);
+            }
+        }
+        for (auto& qq : players) {
+            if (!qq || qq->zombie || !qq->alive || qq->spectator() || qq->team != kPeople) continue;
+            if (!near3(p.body.pos, qq->body.pos, kMeleeDistance)) continue;
+            hit(*qq, 34, &p, kMeleeKill);
+            bit = true;
+            break;
+        }
+        if (bit) p.next_bite = world_time + 0.8;
+    }
+    // The wave's announcements, its spawns, and its dead slots given back.
+    void horde_tick() {
+        horde->tick(world_time);
+        const horde::Phase ph = horde->phase();
+        if (ph != horde_told) {
+            horde_told = ph;
+            switch (ph) {
+                case horde::Phase::Wave:
+                    if (horde->wave() > horde_wave_told) {
+                        horde_wave_told = horde->wave();
+                        char text[96];
+                        std::snprintf(text, sizeof text, "Wave %d: %d zombies coming",
+                                      horde->wave(), horde->config().wave_zombies(horde->wave()));
+                        system_chat(text);
+                    }
+                    break;
+                case horde::Phase::Intermission: {
+                    char text[96];
+                    std::snprintf(text, sizeof text, "Wave cleared; the core mends to %d",
+                                  horde->core_hp());
+                    system_chat(text);
+                    break;
+                }
+                case horde::Phase::Victory:
+                    system_chat("Every wave is down. Victory!");
+                    break;
+                case horde::Phase::Defeat:
+                    system_chat("The core has fallen. Defeat.");
+                    break;
+                case horde::Phase::Prep:
+                    break;
+            }
+        }
+        std::vector<horde::SpawnAt> due;
+        while (horde->take_due(due, world_time))
+            for (const horde::SpawnAt& s : due) add_zombie(s);
+        free_dead_zombies();
+    }
+
     // Whether `who` is looking at `t`: their view's ray passing within a body's
     // half width of it, from the eye down to the knees.
     static bool aimed_at(const Player& who, const Player& t) {
@@ -1056,6 +1213,7 @@ struct Server::Impl {
             if (!p.playing()) continue;
             if (p.lane >= 0) steer_target(p);
             if (p.aim_bot) steer_aim_bot(p);
+            if (p.zombie) steer_zombie(p);
             keep_stocked(p);
             p.input.holding_gun = p.tool == kToolWeapon;
             p.input.secondary_fire = p.secondary;
@@ -1063,9 +1221,11 @@ struct Server::Impl {
             p.input.jump = false;
             if (r.fall_damage > 0) set_hp(p, p.hp - r.fall_damage, nullptr, kFallKill, nullptr);
             if (!p.alive) continue;
+            if (p.zombie) zombie_bite(p);
             if (p.body.pos.z > 64.0f || !finite3(p.body.pos)) kill(p, nullptr, kFallKill);
         }
         if (aim_mode()) aim_tick(dt);
+        else if (horde_mode()) horde_tick();
         else tutorial_tick();
         for (size_t i = 0; i < grenades.size();) {
             if (world_time >= grenades[i].explode_at) {
@@ -1480,6 +1640,11 @@ struct Server::Impl {
         if (value == kBuildBlock) {
             p.blocks -= 1;
             if (p.blocks < -kBuildTolerance || !within(kMaxBlockDistance)) return;
+            if (horde && !horde->can_build(x, y, z)) {
+                p.blocks += 1;   // a refusal spends no block
+                system_chat("That block would seal the last way in.", p.id);
+                return;
+            }
             if (!map.build_point(x, y, z, p.color | 0x7F000000u)) return;
             touched({Cell{x, y, z}}, true);
         } else {
@@ -1523,6 +1688,7 @@ struct Server::Impl {
         std::vector<Cell> built;
         for (const Cell& c : pts) {
             if (map.solid(c.x, c.y, c.z)) continue;
+            if (horde && !horde->can_build(c.x, c.y, c.z)) continue;   // the veto skips a cell
             if (!map.build_point(c.x, c.y, c.z, p.color | 0x7F000000u)) break;
             built.push_back(c);
         }
@@ -1705,6 +1871,10 @@ bool Server::start(std::string& err) {
     if (s.aim_mode()) {
         s.aim.scenario = s.cfg.scenario;
         s.add_aim_bots();
+    } else if (s.horde_mode()) {
+        // The corners of the map are the spawns, the middle the core; the map
+        // is flat open land everywhere outside the course's corridor.
+        s.horde = std::make_unique<horde::Horde>(s.phys_map, s.horde_cfg);
     } else {
         s.add_targets();
         s.bot_count = training::kLaneCount;
@@ -1732,6 +1902,10 @@ bool Server::start(std::string& err) {
     }
     s.world_time = now_sec();
     s.next_network = s.world_time;
+    if (s.horde) {
+        s.horde->restart(s.world_time);
+        s.system_chat("Build while it is quiet: the first wave comes in twenty seconds.");
+    }
     s.log("training course on 127.0.0.1:%u, %d world updates a second",
           static_cast<unsigned>(s.cfg.port), s.cfg.update_rate);
     return true;

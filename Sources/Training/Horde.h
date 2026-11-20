@@ -80,6 +80,8 @@ public:
     // Wave done when nothing waits and nothing walks.
     bool wave_cleared() const { return pending_.empty() && up_ <= 0; }
     int core_hp() const { return core_hp_; }
+    // The settings this runs with, for the host's announcements.
+    const Config& config() const { return cfg_; }
 
     // The cells of the zombies due by `now`, taken out of the queue.
     bool take_due(std::vector<SpawnAt>& out, double now);

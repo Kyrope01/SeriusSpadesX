@@ -41,7 +41,7 @@ struct Config {
     double prep_seconds = 20.0;
     double intermission_seconds = 12.0;
     // Zombies trickle out, not all at once.
-    double spawn_interval = 1.5;
+    double spawn_interval = 0.35;
     int wave_count_max = 8;
     int core_hp = 150;
     // How much of the core's health a cleared wave mends back.
@@ -50,15 +50,23 @@ struct Config {
     double field_period = 0.5;
     // How big a wave is: base + growth * (wave - 1), capped.
     int wave_zombies(int wave) const;
-    static constexpr int kWaveBase = 6;
-    static constexpr int kWaveGrowth = 3;
-    static constexpr int kWaveMaxZombies = 40;
+    static constexpr int kWaveBase = 12;
+    static constexpr int kWaveGrowth = 8;
+    static constexpr int kWaveMaxZombies = 100;
+    // How the dead cross: a drop of at most kWalkDrop, a climb of at most
+    // kWalkClimb - two, because nothing here cannot be jumped; three blocks
+    // stacked is a wall that has to be dug. z grows downward, so a climb is
+    // the negative side of the difference.
+    static constexpr int kWalkDrop = 5, kWalkClimb = 2;
 };
 
 // One zombie due at `at`, at a cell that was walkable when its wave began.
+// `corner` is the spawn box it comes from: the wave walks as one pack per
+// corner, the first out in front and the rest following it.
 struct SpawnAt {
     int x, y, z;
     double at;
+    int corner;
 };
 
 class Horde {

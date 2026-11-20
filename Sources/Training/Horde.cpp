@@ -133,7 +133,11 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y) {
             if (nx == block_x && ny == block_y) continue;
             if (dist[cell_index(nx, ny)] != kUnreachable) continue;
             if (!walkable(nx, ny)) continue;
-            if (std::abs(ground(nx, ny) - g) > 1) continue;  // a step, not a ledge
+            // z grows downward: dz is a drop and -dz a climb. A fall of at
+            // most kWalkDrop, a jump of at most kWalkClimb; deeper down is a
+            // cliff and three stacked blocks are a wall.
+            const int dz = ground(nx, ny) - g;
+            if (dz > Config::kWalkDrop || dz < -Config::kWalkClimb) continue;
             dist[cell_index(nx, ny)] = d + 1;
             queue.push_back((ny << 9) | nx);
         }
@@ -174,6 +178,7 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
     if (!walkable(x, y)) return false;
     const int here = dist_[cell_index(x, y)];
+    const int g = ground(x, y);
     static const int kDx[4] = {1, -1, 0, 0};
     static const int kDy[4] = {0, 0, 1, -1};
     int best = -1, bx = -1, by = -1;
@@ -183,6 +188,11 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
         const int nd = dist_[cell_index(nx, ny)];
         if (nd < 0) continue;
         if (here >= 0 && nd >= here) continue;  // downhill only
+        // The crossing the field demands: a jump of two, a fall of at most
+        // kWalkDrop. Anything steeper is a wall; the dig, not the walk, takes
+        // it, and off-field cells rejoin only over crossable ground too.
+        const int dz = ground(nx, ny) - g;
+        if (dz > Config::kWalkDrop || dz < -Config::kWalkClimb) continue;
         if (best < 0 || nd < best) {
             best = nd;
             bx = nx;
@@ -262,10 +272,27 @@ void Horde::place_wave(double now) {
         if (px < 0) continue;  // a corner with nowhere to stand: skip it
         // Zombies stagger out a few cells apart so they do not march in one
         // column: wave member i/4 stands back behind its corner's first cell,
-        // on the side away from the core.
+        // on the side away from the core. The back cell must itself stand:
+        // rows of dozens reach past cliffs and water, and a zombie planted
+        // in one never leaves. The nearest walkable cell of that row is
+        // taken instead, and a strip with none crowds onto the first cell.
         const int back = i / 4;
         const int away = cfg_.core_y > cy ? -1 : 1;
-        SpawnAt s{px, py + back * away, pg, now + i * cfg_.spawn_interval};
+        int sx = px, sy = py + back * away;
+        if (back > 0 && !walkable(sx, sy)) {
+            int found = 0;
+            for (int r = 0; r <= cfg_.spawn_size && !found; ++r)
+                for (int dy = -r; dy <= r && !found; ++dy)
+                    for (int dx = -r; dx <= r && !found; ++dx) {
+                        const int wx = px + dx, wy = py + back * away + dy;
+                        if (!walkable(wx, wy)) continue;
+                        sx = wx;
+                        sy = wy;
+                        found = 1;
+                    }
+            if (!found) { sx = px; sy = py; }
+        }
+        SpawnAt s{sx, sy, back > 0 ? ground(sx, sy) : pg, now + i * cfg_.spawn_interval, corner};
         pending_.push_back(s);
     }
     std::sort(pending_.begin(), pending_.end(),

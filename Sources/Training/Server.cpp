@@ -267,6 +267,13 @@ struct Player {
     bool to_far = true;      // which end of the lane it is walking to
     bool ext_teamplay = false;
     bool ext_flashlight = false;   // claimed Flashlight (0x32)
+    bool ext_outfit = false;      // claimed Player Outfit (0x35)
+    // The walk and jump flags the zombies' clients were last told, and the
+    // bite whose swing packet has yet to be closed. Real players tell the
+    // clients these things themselves; the horde is told for them.
+    uint8_t net_input = 0;
+    bool swing_shown = false;
+    double swing_until = 0.0;
 
     // Aim: a target of the scenario, which the server moves itself.
     bool aim_bot = false;
@@ -448,6 +455,25 @@ struct Server::Impl {
     }
     bool aim_mode() const { return cfg.mode == training::Mode::Aim; }
     bool horde_mode() const { return cfg.mode == training::Mode::Horde; }
+    // The core's column, built at the start: the cells out of the ground it
+    // stands on, and the ground cell it stands over, which all belong to it.
+    int core_top_z = 0, core_ground_z = 0;
+    bool core_column_cell(int x, int y, int z) const {
+        if (!horde_mode()) return false;
+        if (x != horde_cfg.core_x || y != horde_cfg.core_y) return false;
+        return z >= core_top_z && z <= core_ground_z - 1;
+    }
+    // The core stands three blocks out of the ground, in the colour of its
+    // team: everything a client needs to see where to defend. The intel
+    // drawn on top of it comes from StateData, and the dig and blast vetoes
+    // below keep it standing.
+    void build_core_column() {
+        const int x = horde_cfg.core_x, y = horde_cfg.core_y;
+        core_ground_z = map.get_z(x, y);
+        for (int k = 1; k <= 3; ++k)
+            map.set(x, y, core_ground_z - k, 0x7F3080FFu);
+        core_top_z = core_ground_z - 3;
+    }
     // The horde's brain, and what its host remembers between its ticks.
     horde::Config horde_cfg;
     std::unique_ptr<horde::Horde> horde;
@@ -502,7 +528,23 @@ struct Server::Impl {
 
     // --- StateData --------------------------------------------------------
     // Territory control with no territories: the course has nothing to
-    // capture, so it is never won.
+    // capture, so it is never won. The horde is capture the flag, with
+    // nothing to capture: team 0's flag stands for the core, and the
+    // server never picks an intel up, so it stands there the whole game.
+    // The client draws an intel - Models/MapObjects/Intel.kv6 - at the
+    // flag's place, which is what the core is drawn as.
+    Vec3 core_intel_pos() const {
+        // The top of the core's column: after it is built, get_z is its plane.
+        return Vec3{static_cast<float>(horde_cfg.core_x) + 0.5f,
+                    static_cast<float>(horde_cfg.core_y) + 0.5f,
+                    static_cast<float>(map.get_z(horde_cfg.core_x, horde_cfg.core_y))};
+    }
+    Vec3 under_core() const {
+        // Inside the bedrock the core stands on, where nothing sees it: the
+        // rest of the mode's list, which a client would draw at its zero.
+        return Vec3{static_cast<float>(horde_cfg.core_x) + 0.5f,
+                    static_cast<float>(horde_cfg.core_y) + 0.5f, 62.9f};
+    }
     ByteWriter state_data(int player_id) {
         ByteWriter bw;
         bw.write_u8(static_cast<uint8_t>(PacketId::StateData));
@@ -512,8 +554,20 @@ struct Server::Impl {
         write_color(bw, team_color[1]);
         bw.write_fixed_string("Blue", 10);
         bw.write_fixed_string(horde_mode() ? "Zombies" : "Green", 10);
-        bw.write_u8(1);
-        bw.write_u8(0);
+        if (horde_mode()) {
+            bw.write_u8(0);                    // Capture the Flag
+            bw.write_u8(0);                    // captures: team 0
+            bw.write_u8(0);                    // captures: the horde
+            bw.write_u8(10);                   // captures to win: never reached
+            bw.write_u8(0);                    // nobody holds an intel
+            bw.write_vec(core_intel_pos());    // team 0's flag: the core
+            bw.write_vec(under_core());        // team 1's flag, buried
+            bw.write_vec(under_core());        // team 0's base, buried
+            bw.write_vec(under_core());        // team 1's base, buried
+        } else {
+            bw.write_u8(1);
+            bw.write_u8(0);
+        }
         for (size_t i = 0; i < 16; ++i)
             for (int k = 0; k < 13; ++k) bw.write_u8(0);
         return bw;
@@ -684,6 +738,8 @@ struct Server::Impl {
             p.body.eye = at;
             p.body.ori = Vec3{p.team == 0 ? 1.0f : -1.0f, 0, 0};
             p.input = physics::Input{};
+            p.net_input = 0;
+            p.swing_shown = false;
             p.alive = true;
             p.tool = kToolWeapon;
             if (p.zombie) p.tool = kToolSpade;   // it never fires a shot
@@ -705,6 +761,12 @@ struct Server::Impl {
         } else if (p.zombie) {
             p.walk_ref = p.body.pos;
             p.walk_ref_at = world_time;
+            // Its hands, not a gun: a spade, drawn by the grunts' Tool model.
+            ByteWriter tool;
+            tool.write_u8(static_cast<uint8_t>(PacketId::SetTool));
+            tool.write_u8(static_cast<uint8_t>(p.id));
+            tool.write_u8(static_cast<uint8_t>(kToolSpade));
+            broadcast(tool, true);
         }
     }
 
@@ -1027,7 +1089,18 @@ struct Server::Impl {
             bit = true;
             break;
         }
-        if (bit) p.next_bite = world_time + 0.8;
+        if (bit) {
+            p.next_bite = world_time + 0.8;
+            // One frame of teeth: the swing the clients animate, closed again
+            // in the tick after.
+            p.swing_shown = true;
+            p.swing_until = world_time + 0.4;
+            ByteWriter bw;
+            bw.write_u8(static_cast<uint8_t>(PacketId::WeaponInput));
+            bw.write_u8(static_cast<uint8_t>(p.id));
+            bw.write_u8(1);
+            broadcast(bw, false);
+        }
     }
     // The wave's announcements, its spawns, and its dead slots given back.
     void horde_tick() {
@@ -1256,13 +1329,39 @@ struct Server::Impl {
             if (!p.playing()) continue;
             if (p.lane >= 0) steer_target(p);
             if (p.aim_bot) steer_aim_bot(p);
-            if (p.zombie) steer_zombie(p);
+            if (p.zombie) {
+                steer_zombie(p);
+                // What a player's own client would tell everybody, the horde
+                // tells for it: the clients animate its walk by it.
+                const uint8_t f = (p.input.mf ? 1u : 0u) | (p.input.mb ? 2u : 0u) |
+                                  (p.input.ml ? 4u : 0u) | (p.input.mr ? 8u : 0u) |
+                                  (p.input.jump ? 16u : 0u);
+                if (f != p.net_input) {
+                    p.net_input = f;
+                    ByteWriter bw;
+                    bw.write_u8(static_cast<uint8_t>(PacketId::InputData));
+                    bw.write_u8(static_cast<uint8_t>(p.id));
+                    bw.write_u8(static_cast<uint8_t>(f));
+                    broadcast(bw, false);
+                }
+                if (p.swing_shown && world_time >= p.swing_until) {
+                    p.swing_shown = false;
+                    ByteWriter bw;
+                    bw.write_u8(static_cast<uint8_t>(PacketId::WeaponInput));
+                    bw.write_u8(static_cast<uint8_t>(p.id));
+                    bw.write_u8(0);
+                    broadcast(bw, false);
+                }
+            }
             keep_stocked(p);
             p.input.holding_gun = p.tool == kToolWeapon;
             p.input.secondary_fire = p.secondary;
             const physics::StepResult r = physics::step(phys_map, p.body, p.input, dt);
             p.input.jump = false;
-            if (r.fall_damage > 0) set_hp(p, p.hp - r.fall_damage, nullptr, kFallKill, nullptr);
+            // The fallen have no fear of falling: a cliff on the map's rim is
+            // a walk down, not a death.
+            if (r.fall_damage > 0 && !p.zombie)
+                set_hp(p, p.hp - r.fall_damage, nullptr, kFallKill, nullptr);
             if (!p.alive) continue;
             if (p.zombie) zombie_bite(p);
             if (p.body.pos.z > 64.0f || !finite3(p.body.pos)) kill(p, nullptr, kFallKill);
@@ -1299,8 +1398,10 @@ struct Server::Impl {
         std::vector<Cell> removed;
         for (int nx = x - 1; nx <= x + 1; ++nx)
             for (int ny = y - 1; ny <= y + 1; ++ny)
-                for (int nz = z - 1; nz <= z + 1; ++nz)
+                for (int nz = z - 1; nz <= z + 1; ++nz) {
+                    if (core_column_cell(nx, ny, nz)) continue;  // the core holds
                     map.destroy_point(nx, ny, nz, &removed);
+                }
         touched(removed, false);
         ByteWriter bw;
         bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
@@ -1353,10 +1454,10 @@ struct Server::Impl {
             case PacketId::VersionResponse: {
                 p.client_info = true;
                 // Offered: kick reasons, Teamplay, the lights (flashlights and
-                // the time of day) and message types.
+                // the time of day), message types and the outfits.
                 ByteWriter bw;
                 bw.write_u8(static_cast<uint8_t>(PacketId::ExtensionInfo));
-                bw.write_u8(5);
+                bw.write_u8(6);
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::ChatType));
                 bw.write_u8(1);
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::Teamplay));
@@ -1366,6 +1467,8 @@ struct Server::Impl {
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::Flashlight));
                 bw.write_u8(1);
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::DaytimeWeather));
+                bw.write_u8(1);
+                bw.write_u8(static_cast<uint8_t>(proto::Extension::PlayerOutfit));
                 bw.write_u8(1);
                 send(p, bw);
             } break;
@@ -1399,6 +1502,18 @@ struct Server::Impl {
                     else send(p, state);
                 }
                 p.ext_flashlight = fl;
+                const bool po = m.offers(proto::Extension::PlayerOutfit);
+                if (po && !p.ext_outfit) {
+                    // Team 1 wears the walking dead: outfit 64, which its
+                    // holders draw from Models/Player/Custom as the grunts.
+                    // An outfit shows at its player's next spawn, and every
+                    // wave the horde raises is one.
+                    ByteWriter outfits_bytes;
+                    proto::write_team_outfit(outfits_bytes, 1, proto::kOutfitZombie);
+                    if (p.loading) p.saved.push_back(outfits_bytes.data);
+                    else send(p, outfits_bytes);
+                }
+                p.ext_outfit = po;
             } break;
             case PacketId::Flashlight: on_flashlight(p, br); break;
             case PacketId::Teamplay: on_teamplay(p, br); break;
@@ -1693,6 +1808,10 @@ struct Server::Impl {
         } else {
             if (p.tool == kToolWeapon && p.gun.is_empty(world_time)) return;
             if (!map.solid(x, y, z)) return;
+            if (core_column_cell(x, y, z)) {
+                system_chat("The core cannot be torn down.", p.id);
+                return;
+            }
             if (p.tool == kToolSpade && !within(kMaxDigDistance)) return;
             std::vector<Cell> removed;
             if (value == kDestroyBlock) {
@@ -1917,7 +2036,20 @@ bool Server::start(std::string& err) {
         s.add_aim_bots();
     } else if (s.horde_mode()) {
         // The corners of the map are the spawns, the middle the core; the map
-        // is flat open land everywhere outside the course's corridor.
+        // is flat open land everywhere outside the course's corridor. On a
+        // .vxl of coastline the cells the settings ask for can be at sea, so
+        // each is walked in to the nearest land.
+        s.horde_cfg.core_x = s.cfg.core_x;
+        s.horde_cfg.core_y = s.cfg.core_y;
+        s.nearest_land(s.horde_cfg.core_x, s.horde_cfg.core_y);
+        for (int k = 0; k < 4; ++k) {
+            int x = s.horde_cfg.spawn_x[k], y = s.horde_cfg.spawn_y[k];
+            s.nearest_land(x, y);
+            s.horde_cfg.spawn_x[k] = x;
+            s.horde_cfg.spawn_y[k] = y;
+        }
+        s.build_core_column();
+        s.map.to_solid_map(s.phys_map);
         s.horde = std::make_unique<horde::Horde>(s.phys_map, s.horde_cfg);
     } else {
         s.add_targets();

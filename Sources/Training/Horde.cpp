@@ -104,13 +104,25 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y) {
     const int cx = cfg_.core_x, cy = cfg_.core_y;
     if (cx < 0 || cx >= kMapW || cy < 0 || cy >= kMapH) return;
     if (block_x == cx && block_y == cy) return;
-    if (!walkable(cx, cy)) return;
-    std::vector<int32_t> queue;
-    queue.reserve(4096);
-    queue.push_back((cy << 9) | cx);  // x < 512 fits beside y in an int
-    dist[cell_index(cx, cy)] = 0;
     static const int kDx[4] = {1, -1, 0, 0};
     static const int kDy[4] = {0, 0, 1, -1};
+    std::vector<int32_t> queue;
+    queue.reserve(4096);
+    // The core may carry a column, the marker the clients draw: its ground
+    // sits steps above the plain, and no walk starts there. The cells beside
+    // it are seeded alongside it, so the field still spreads from the
+    // neighbourhood the horde only has to reach to bite.
+    auto seed = [&](int x, int y, int d) {
+        if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return;
+        if (x == block_x && y == block_y) return;
+        if (dist[cell_index(x, y)] != kUnreachable) return;
+        if (!walkable(x, y)) return;
+        dist[cell_index(x, y)] = d;
+        queue.push_back((y << 9) | x);  // x < 512 fits beside y in an int
+    };
+    seed(cx, cy, 0);
+    for (int k = 0; k < 4; ++k) seed(cx + kDx[k], cy + kDy[k], 1);
+    if (queue.empty()) return;
     for (size_t qi = 0; qi < queue.size(); ++qi) {
         const int x = queue[qi] & 511, y = queue[qi] >> 9;
         const int d = dist[cell_index(x, y)];

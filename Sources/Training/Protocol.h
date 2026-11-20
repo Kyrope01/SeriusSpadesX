@@ -63,6 +63,9 @@ enum class PacketId : uint8_t {
     Flashlight        = 114,
     // Daytime and Weather (extension 0x33): the time of day, server to client.
     DaytimeWeather    = 115,
+    // Player Outfit (extension 0x35): what a body is drawn from. Only ever
+    // sent to a connection that claimed the extension.
+    PlayerOutfit      = 117,
 };
 
 // The three guns. The protocol calls this field the gun and the packets that
@@ -156,6 +159,8 @@ enum class Extension : uint8_t {
     Flashlight = 0x32,
     // The time of day: a client that claimed it draws a night at midnight.
     DaytimeWeather = 0x33,
+    // What a team is drawn as, aosprotocol's player-outfit extension.
+    PlayerOutfit = 0x35,
     // Player ids past 31.
     PlayerLimit = 192,
     // Chat types sent as they are, for the centre-screen lines and banners.
@@ -223,5 +228,22 @@ constexpr uint16_t kMidnight = 0;
 constexpr uint16_t kNoon = 720;
 // The whole packet, id included.
 void write_daytime_sky(ByteWriter& bw, uint16_t time);
+
+// --- Player Outfit (extension 0x35, packet 117) ----------------------------
+//
+// `[117][sub][...]`, from aosprotocol extensions/player-outfit.md. Version 1
+// has the sub packets 0 Set Outfit (player(1) outfit(1)) and 1 Team Outfits
+// ((team(1) outfit(1))* to the end of the packet; a team not listed wears 0).
+// An outfit only shows at its player's next spawn, so a wave counts: every
+// zombie it raises is its next spawn.
+//
+// What the walking dead wear, aosprotocol #14's zombie theme: the plain
+// Zombie, whose number it gives as 64. A client that claims the extension
+// draws it from Models/Player/Custom as ZombieGrunt1 to 3 by player id, so a
+// horde has three faces.
+constexpr uint8_t kOutfitZombie = 64;
+enum class OutfitSub : uint8_t { TeamOutfits = 1 };
+// The whole packet, id included: one team's outfit.
+void write_team_outfit(ByteWriter& bw, uint8_t team, uint8_t outfit);
 
 } // namespace proto

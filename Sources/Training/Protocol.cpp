@@ -232,4 +232,11 @@ void write_daytime_sky(ByteWriter& bw, uint16_t time) {
     bw.write_u8(0); bw.write_u8(0);        // weather: none in version 1
 }
 
+void write_team_outfit(ByteWriter& bw, uint8_t team, uint8_t outfit) {
+    bw.write_u8(static_cast<uint8_t>(PacketId::PlayerOutfit));
+    bw.write_u8(static_cast<uint8_t>(OutfitSub::TeamOutfits));
+    bw.write_u8(team);
+    bw.write_u8(outfit);
+}
+
 } // namespace proto

@@ -94,6 +94,22 @@ void test_field() {
     check(h.next_step(100, 100, tx, ty), "next_step answers on open ground");
     check(h.distance(tx, ty) < h.distance(100, 100), "next_step heads downhill");
     check(!h.next_step(256, 256, tx, ty), "at the core, no step helps");
+
+    // The core's column, three blocks standing on it: its top is a walkable
+    // cell nothing steps onto, but the field has to spread from the cells
+    // beside it - that is where the horde stops to bite.
+    {
+        SolidMap marked;
+        plain(marked);
+        for (int k = 1; k <= 3; ++k)
+            marked.set_block(256, 256, GROUND_TOP - k, true);
+        horde::Horde hh(marked, horde_cfg(256, 256));
+        check(hh.distance(256, 256) >= 0, "the column's top is on the field");
+        check(hh.distance(255, 256) == 1, "beside the column is one step from the core");
+        check(hh.distance(255, 255) == 2 || hh.distance(257, 256) == 2,
+              "the field spreads around the column");
+        check(hh.distance(32, 32) > 400, "the far corners are still a long walk");
+    }
 }
 
 void test_veto() {

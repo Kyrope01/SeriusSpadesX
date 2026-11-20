@@ -489,8 +489,10 @@ struct Server::Impl {
     // The packs: one per corner, a single path each - the last joined zombie
     // of a corner is the one the next of its pack follows.
     int pack_tail[4] = {-1, -1, -1, -1};
-    // Which corners of the walking wave have had their spawn pinged.
-    int wave_pinged = 0;
+    // When each corner's spawn ping next goes out, while that corner still
+    // streams its wave: one marker every few seconds survives a client's
+    // map load, which a single early ping never did.
+    double corner_ping_next[4] = {0.0, 0.0, 0.0, 0.0};
     void serve_maps() {
         if (job_running && job_done.load()) {
             map_job.join();
@@ -1215,8 +1217,9 @@ struct Server::Impl {
         }
     }
     // Where a wave comes from, while it comes: the same ping the tutorial's
-    // goals use, once per corner with the wave still walking - the pack's
-    // first spawn, held long enough to be walked to.
+    // goals use, re-sent for a corner every few seconds it still streams -
+    // one marker at the pack's spawn, held long enough to be walked to,
+    // renewed so a client mid-load still sees it once it lands.
     void ping_wave_spawn(const horde::SpawnAt& s) {
         ByteWriter bw;
         bw.write_u8(static_cast<uint8_t>(PacketId::Teamplay));
@@ -1244,8 +1247,11 @@ struct Server::Impl {
                 case horde::Phase::Wave:
                     if (horde->wave() > horde_wave_told) {
                         horde_wave_told = horde->wave();
-                        for (int k = 0; k < 4; ++k) pack_tail[k] = -1;   // new packs
-                        wave_pinged = 0;
+                        // New packs, their pings due right away.
+                        for (int k = 0; k < 4; ++k) {
+                            pack_tail[k] = -1;
+                            corner_ping_next[k] = 0.0;
+                        }
                         char text[96];
                         std::snprintf(text, sizeof text, "Wave %d: %d zombies coming",
                                       horde->wave(), horde->config().wave_zombies(horde->wave()));
@@ -1272,9 +1278,11 @@ struct Server::Impl {
         std::vector<horde::SpawnAt> due;
         while (horde->take_due(due, world_time)) {
             for (const horde::SpawnAt& s : due) {
-                // A corner's first of the wave: show where it comes from.
-                if (!(wave_pinged & (1 << (s.corner & 3)))) {
-                    wave_pinged |= 1 << (s.corner & 3);
+                // While the corner streams, its spawn is pinged again every
+                // so often: the marker survives a client's map load.
+                const int c = s.corner & 3;
+                if (world_time >= corner_ping_next[c]) {
+                    corner_ping_next[c] = world_time + 30.0;
                     ping_wave_spawn(s);
                 }
                 add_zombie(s);

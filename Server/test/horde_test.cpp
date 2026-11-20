@@ -5,10 +5,11 @@
 //
 // The map is a plain: ground with its top at z = 32. One solid voxel is no
 // ground at all, so the ground plane is a slab, z = 32 and z = 33 solid in
-// every column. A wall is the same three voxels higher, its top at z = 29: a
-// walker on the plain (ground 32) cannot step up a run of three onto it - two
-// is a jump - and it was built not to be tunneled under either: nothing here
-// digs.
+// every column. A wall is the same three voxels higher, its top at z = 29.
+// Two crossings are asked of it: the strict one the build veto works with -
+// a climb of two is a jump, a run of three is not stepped onto - and the
+// field the zombies actually walk, which pays the spade's price for every
+// block beyond the jump and digs on through.
 
 #include <cstdio>
 #include <vector>
@@ -123,12 +124,21 @@ void test_field() {
         rough.set_block(230, 230, 38, true);
         horde::Horde hh(rough, horde_cfg(256, 256));
         check(hh.distance(200, 200) >= 0, "a pile of two is jumped");
-        check(hh.distance(210, 210) < 0, "a pile of three is a wall");
+        check(hh.distance(210, 210) >= 0, "a pile of three is dug through");
         check(hh.distance(220, 220) >= 0, "a pit four deep is walked into");
-        check(hh.distance(230, 230) < 0, "a pit six deep is not crossed");
+        check(hh.distance(230, 230) >= 0, "a pit six deep is fallen into");
+        // The dig field charges for the crossing: on the plain the pile is
+        // no farther than its cell, but every block of climb beyond the
+        // jump adds the spade's steps to the way over it.
+        SolidMap flat;
+        plain(flat);
+        horde::Horde hf(flat, horde_cfg(256, 256));
+        check(hh.distance(210, 210) - hf.distance(210, 210) >= horde::Config::kDigPenalty,
+              "crossing a three-block pile pays the spade's steps");
         int px = 0, py = 0;
-        check(hh.next_step(220, 220, px, py) && px == 221 && py == 220,
-              "from the pit, climbing four out is refused: it heads straight");
+        check(hh.next_step(220, 220, px, py) &&
+                  hh.distance(px, py) < hh.distance(220, 220),
+              "from the pit, the field leads it out");
     }
 
     // The core's column, three blocks standing on it: its top is a walkable
@@ -178,12 +188,13 @@ void test_veto() {
         ring(map, Ring{100, 100, 6, -1, -1});
         horde::Horde h(map, horde_cfg(100, 100));
         h.on_map_edited();
-        h.tick(2.0);  // past the debounce: the field agrees the ring is shut
-        check(h.distance(130, 100) < 0, "outside the shut ring is off the field");
+        h.tick(2.0);  // past the debounce: the recomputed field prices the wall
+        check(h.distance(130, 100) >= 0, "with a spade, the shut ring is still crossed");
         check(h.can_build(130, 100, 31), "with the core already sealed, the veto fails open");
         int tx = 0, ty = 0;
-        check(h.next_step(140, 100, tx, ty), "off the field, a zombie still walks");
-        check(tx == 139 && ty == 100, "it falls back to heading straight for the core");
+        check(h.next_step(140, 100, tx, ty) &&
+                  h.distance(tx, ty) < h.distance(140, 100),
+              "off the strict field, a zombie still walks the dig");
     }
 }
 

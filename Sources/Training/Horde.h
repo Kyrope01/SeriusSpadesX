@@ -6,16 +6,20 @@
 // veto. Physics, players and packets stay in Server.cpp, which steers the
 // zombies it owns by asking this where to step.
 //
-// The field is one BFS from the core over walkable cells (its ground level
+// The field is one walk from the core over walkable cells (its ground level
 // and the headroom above), recomputed a short debounce after every edit; a
-// zombie steps to the neighbour whose distance is lowest, which is a shortest
-// path around whatever has been built since. The veto asks the field's
-// question the other way round: with the cell a player wants to build at
-// taken as unwalkable, is there still a route from a spawn corner to the
+// zombie steps to the neighbour whose distance is lowest, which is a cheapest
+// path around whatever has been built since. That walk prices a dig: a climb
+// beyond the jump costs the blocks the spade must take off, so the field
+// prefers the way round and only leads into walls thin enough to matter. The
+// veto asks the field's stricter question the other way round: with the cell
+// a player wants to build at taken as unwalkable, is there still a route a
+// jump-fearing, fall-counting walker could take from a spawn corner to the
 // core?  If not, and there was one before, that block would seal the last
 // way in, and is refused. When the map is already sealed (or the field is
 // out of date), the veto fails open and the tower stands or falls as the
-// player builds it.
+// player builds it; the horde's own teeth are not the strict walk, and a
+// sealed world is one the spades open eventually.
 #include <cstdint>
 #include <vector>
 
@@ -53,11 +57,21 @@ struct Config {
     static constexpr int kWaveBase = 12;
     static constexpr int kWaveGrowth = 8;
     static constexpr int kWaveMaxZombies = 100;
-    // How the dead cross: a drop of at most kWalkDrop, a climb of at most
-    // kWalkClimb - two, because nothing here cannot be jumped; three blocks
-    // stacked is a wall that has to be dug. z grows downward, so a climb is
-    // the negative side of the difference.
+    // How the dead cross: a climb of at most kWalkClimb is jumped and a drop
+    // of at most kWalkDrop walked - the strict crossing the build veto asks
+    // with. The field the zombies actually walk prices more: a fall of at
+    // most kFall, for they fear no landing, and any climb, with every block
+    // over the jump costing kDigPenalty steps - the spade that eventually
+    // digs it takes about that long - so the easy way round is walked first
+    // and a wall is only dug through when it is thin. Cliffs taller than the
+    // map and rooms without headroom stay unreachable either way. z grows
+    // downward, so a climb is the negative side of the delta.
     static constexpr int kWalkDrop = 5, kWalkClimb = 2;
+    static constexpr int kFall = 63, kDigPenalty = 12;
+    // How far out from its asked-for centre a corner's spawn point may be
+    // sought, in rings: the corners a real map names sit in border mountains
+    // and sea, and only the field decides where a wave can walk in from.
+    static constexpr int kSpawnSearch = 200;
 };
 
 // One zombie due at `at`, at a cell that was walkable when its wave began.
@@ -123,7 +137,7 @@ private:
     bool walkable(int x, int y);
     int ground(int x, int y);
     bool reach_spawn(const std::vector<int32_t>& dist) const;
-    void flood(std::vector<int32_t>& dist, int block_x, int block_y);
+    void flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig);
     void begin_wave(double now);
     void place_wave(double now);
 

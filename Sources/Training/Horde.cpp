@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
+#include <queue>
+#include <utility>
 
 #include "SolidMap.h"
 
@@ -94,20 +97,27 @@ bool Horde::walkable(int x, int y) {
 
 // --- the field ---------------------------------------------------------------
 
-// A BFS from the core over walkable cells whose grounds differ by at most a
-// step: the distance of every cell the walking dead could cross. `block_x`
-// and `block_y` name one column held out of the walk, the veto's candidate;
-// -1 for none. 4-neighbours: corners are where zombies jam on pillars, not
-// where they cross.
-void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y) {
+// A walk from the core over walkable cells: the distance of every cell the
+// walking dead could reach. With `dig` set it is the walk a spade-wielding
+// zombie can truly make: a fall of at most kFall, for it fears no landing,
+// and any climb, each block beyond the jump priced at kDigPenalty steps -
+// about the time its spade takes that block off - so the thin wall is dug
+// through and the long way round is walked instead. Without `dig` it is the
+// strict crossing the build veto asks with: kWalkClimb a jump, kWalkDrop a
+// fall, nothing dug. `block_x` and `block_y` name one column held out of the
+// walk, the veto's candidate; -1 for none. 4-neighbours: corners are where
+// zombies jam on pillars, not where they cross. The dig's edges are not all
+// one step wide, so the walk is a Dijkstra, not the breadth-first queue it
+// once was.
+void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig) {
     dist.assign(static_cast<size_t>(kMapW) * kMapH, kUnreachable);
     const int cx = cfg_.core_x, cy = cfg_.core_y;
     if (cx < 0 || cx >= kMapW || cy < 0 || cy >= kMapH) return;
     if (block_x == cx && block_y == cy) return;
     static const int kDx[4] = {1, -1, 0, 0};
     static const int kDy[4] = {0, 0, 1, -1};
-    std::vector<int32_t> queue;
-    queue.reserve(4096);
+    using QE = std::pair<int32_t, int32_t>;  // (steps so far, y * 512 + x)
+    std::priority_queue<QE, std::vector<QE>, std::greater<QE>> open;
     // The core may carry a column, the marker the clients draw: its ground
     // sits steps above the plain, and no walk starts there. The cells beside
     // it are seeded alongside it, so the field still spreads from the
@@ -118,28 +128,36 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y) {
         if (dist[cell_index(x, y)] != kUnreachable) return;
         if (!walkable(x, y)) return;
         dist[cell_index(x, y)] = d;
-        queue.push_back((y << 9) | x);  // x < 512 fits beside y in an int
+        open.emplace(d, (y << 9) | x);  // x < 512 fits beside y in an int
     };
     seed(cx, cy, 0);
     for (int k = 0; k < 4; ++k) seed(cx + kDx[k], cy + kDy[k], 1);
-    if (queue.empty()) return;
-    for (size_t qi = 0; qi < queue.size(); ++qi) {
-        const int x = queue[qi] & 511, y = queue[qi] >> 9;
-        const int d = dist[cell_index(x, y)];
+    while (!open.empty()) {
+        const QE top = open.top();
+        open.pop();
+        const int d = top.first;
+        const int x = top.second & 511, y = top.second >> 9;
+        if (d != dist[cell_index(x, y)]) continue;  // a cheaper way came later
         const int g = ground(x, y);
         for (int k = 0; k < 4; ++k) {
             const int nx = x + kDx[k], ny = y + kDy[k];
             if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
             if (nx == block_x && ny == block_y) continue;
-            if (dist[cell_index(nx, ny)] != kUnreachable) continue;
             if (!walkable(nx, ny)) continue;
-            // z grows downward: dz is a drop and -dz a climb. A fall of at
-            // most kWalkDrop, a jump of at most kWalkClimb; deeper down is a
-            // cliff and three stacked blocks are a wall.
+            // z grows downward: dz is a drop and -dz a climb.
             const int dz = ground(nx, ny) - g;
-            if (dz > Config::kWalkDrop || dz < -Config::kWalkClimb) continue;
-            dist[cell_index(nx, ny)] = d + 1;
-            queue.push_back((ny << 9) | nx);
+            int nd = d + 1;
+            if (dig) {
+                if (dz > Config::kFall) continue;
+                if (dz < -Config::kWalkClimb)
+                    nd += Config::kDigPenalty * (-dz - Config::kWalkClimb);
+            } else {
+                if (dz > Config::kWalkDrop || dz < -Config::kWalkClimb) continue;
+            }
+            const size_t ni = cell_index(nx, ny);
+            if (dist[ni] != kUnreachable && dist[ni] <= nd) continue;
+            dist[ni] = nd;
+            open.emplace(nd, (ny << 9) | nx);
         }
     }
 }
@@ -166,7 +184,7 @@ bool Horde::reach_spawn(const std::vector<int32_t>& dist) const {
 
 void Horde::recompute() {
     ground_.assign(static_cast<size_t>(kMapW) * kMapH, -2);  // -2: not yet known
-    flood(dist_, -1, -1);
+    flood(dist_, -1, -1, true);
     field_dirty_ = false;
 }
 
@@ -188,11 +206,12 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
         const int nd = dist_[cell_index(nx, ny)];
         if (nd < 0) continue;
         if (here >= 0 && nd >= here) continue;  // downhill only
-        // The crossing the field demands: a jump of two, a fall of at most
-        // kWalkDrop. Anything steeper is a wall; the dig, not the walk, takes
-        // it, and off-field cells rejoin only over crossable ground too.
+        // The field prices the crossing: a fall the zombie fears no landing
+        // from, a climb of any height, for the dig pays what the jump cannot.
+        // It only steps toward where the field says the way in lies; the
+        // stuck-and-dig takes the walls from there.
         const int dz = ground(nx, ny) - g;
-        if (dz > Config::kWalkDrop || dz < -Config::kWalkClimb) continue;
+        if (dz > Config::kFall) continue;
         if (best < 0 || nd < best) {
             best = nd;
             bx = nx;
@@ -236,9 +255,9 @@ bool Horde::can_build(int x, int y, int z) {
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return true;
     if (z < 0 || z >= SolidMap::SIZE_Z) return true;
     std::vector<int32_t> with_block;
-    flood(with_block, x, y);
+    flood(with_block, x, y, false);
     std::vector<int32_t> without_block;
-    flood(without_block, -1, -1);
+    flood(without_block, -1, -1, false);
     dist_ = without_block;  // refreshed while we are here
     field_dirty_ = false;   // its own ground cache, its own flood: consistent
     if (reach_spawn(with_block)) return true;
@@ -251,48 +270,61 @@ bool Horde::can_build(int x, int y, int z) {
 
 // --- the waves ----------------------------------------------------------------
 
+// A wave walks in from wherever the field reaches. Each corner is asked for
+// its anchor: the nearest walkable cell already on the dig field, scanned
+// out ring by ring to kSpawnSearch. The corners a real map names sit in
+// border mountains and sea, and a zombie planted on a ledge the field
+// never touches walks the ledge forever: a corner with no anchor within
+// reach is skipped, and its share of the wave is simply not raised. Back
+// cells hold the same rule, for rows of dozens reach past cliffs onto
+// ground their corner's first cell cannot see; the nearest fielded cell of
+// each row is taken, and a strip with none crowds onto the anchor.
 void Horde::place_wave(double now) {
+    if (field_dirty_) recompute();
     const int n = cfg_.wave_zombies(wave_);
+    auto stands = [&](int x, int y) {
+        return walkable(x, y) && dist_[cell_index(x, y)] >= 0;
+    };
+    int ax[4] = {-1, -1, -1, -1}, ay[4] = {0, 0, 0, 0}, ag[4] = {0, 0, 0, 0};
+    for (int c = 0; c < 4; ++c) {
+        const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
+        for (int r = 0; r < Config::kSpawnSearch && ax[c] < 0; ++r)
+            for (int dy = -r; dy <= r && ax[c] < 0; ++dy)
+                for (int dx = -r; dx <= r && ax[c] < 0; ++dx) {
+                    if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+                    const int x = cx + dx, y = cy + dy;
+                    if (!stands(x, y)) continue;
+                    ax[c] = x;
+                    ay[c] = y;
+                    ag[c] = ground(x, y);
+                }
+    }
     pending_.clear();
     for (int i = 0; i < n; ++i) {
         const int corner = i % 4;
-        const int cx = cfg_.spawn_x[corner], cy = cfg_.spawn_y[corner];
-        // The first walkable cell of the corner's box, scanning out from its
-        // centre: deterministic, so a wave is reproducible in tests.
-        int px = -1, py = -1, pg = -1;
-        for (int r = 0; r <= cfg_.spawn_size / 2 && px < 0; ++r)
-            for (int dy = -r; dy <= r && px < 0; ++dy)
-                for (int dx = -r; dx <= r && px < 0; ++dx) {
-                    const int x = cx + dx, y = cy + dy;
-                    if (!walkable(x, y)) continue;
-                    px = x;
-                    py = y;
-                    pg = ground(x, y);
-                }
-        if (px < 0) continue;  // a corner with nowhere to stand: skip it
+        const int px = ax[corner], py = ay[corner];
+        if (px < 0) continue;  // a corner the field never reaches: skip it
         // Zombies stagger out a few cells apart so they do not march in one
-        // column: wave member i/4 stands back behind its corner's first cell,
-        // on the side away from the core. The back cell must itself stand:
-        // rows of dozens reach past cliffs and water, and a zombie planted
-        // in one never leaves. The nearest walkable cell of that row is
-        // taken instead, and a strip with none crowds onto the first cell.
+        // column: wave member i/4 stands back behind the anchor, on the side
+        // away from the core.
         const int back = i / 4;
-        const int away = cfg_.core_y > cy ? -1 : 1;
+        const int away = cfg_.core_y > py ? -1 : 1;
         int sx = px, sy = py + back * away;
-        if (back > 0 && !walkable(sx, sy)) {
+        if (back > 0 && !stands(sx, sy)) {
             int found = 0;
             for (int r = 0; r <= cfg_.spawn_size && !found; ++r)
                 for (int dy = -r; dy <= r && !found; ++dy)
                     for (int dx = -r; dx <= r && !found; ++dx) {
                         const int wx = px + dx, wy = py + back * away + dy;
-                        if (!walkable(wx, wy)) continue;
+                        if (!stands(wx, wy)) continue;
                         sx = wx;
                         sy = wy;
                         found = 1;
                     }
             if (!found) { sx = px; sy = py; }
         }
-        SpawnAt s{sx, sy, back > 0 ? ground(sx, sy) : pg, now + i * cfg_.spawn_interval, corner};
+        SpawnAt s{sx, sy, back > 0 ? ground(sx, sy) : ag[corner],
+                  now + i * cfg_.spawn_interval, corner};
         pending_.push_back(s);
     }
     std::sort(pending_.begin(), pending_.end(),

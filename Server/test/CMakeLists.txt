@@ -48,6 +48,14 @@ zs_test_executable(server_extension_key_test
 	"${ZS_TEST_SOURCES}/Client/ServerExtensionKey.cpp")
 add_test(NAME server_extension_key COMMAND server_extension_key_test)
 
+# The horde brain (Sources/Training/Horde.cpp): waves, the flow field and the
+# build veto, on a SolidMap built by hand.
+zs_test_executable(horde_test
+	"${CMAKE_CURRENT_SOURCE_DIR}/horde_test.cpp"
+	"${ZS_TEST_SOURCES}/Training/Horde.cpp")
+target_include_directories(horde_test PRIVATE "${ZS_TEST_SOURCES}/Training")
+add_test(NAME horde COMMAND horde_test)
+
 # A VR player's pose, as a client without a headset decodes it (what a macOS
 # build draws other players' VR from)
 find_package(Python3 COMPONENTS Interpreter)
@@ -59,4 +67,4 @@ endif()
 
 add_custom_target(zs_tests DEPENDS
 	vr_state_test xr_caps_test vr_pose_fixture update_package_test training_server_test
-	server_extension_key_test)
+	server_extension_key_test horde_test)

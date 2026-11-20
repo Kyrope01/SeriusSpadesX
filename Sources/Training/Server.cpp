@@ -1136,7 +1136,36 @@ struct Server::Impl {
         p.input = physics::Input{};
         const int cx = static_cast<int>(std::floor(p.body.pos.x));
         const int cy = static_cast<int>(std::floor(p.body.pos.y));
-        if (horde->near_core(cx, cy, 2)) return;   // it bites, it does not walk
+        // The crowd: players pass through players in this game, so the horde
+        // keeps itself apart - a soft push off any of its own inside one
+        // block of reach, the weight fading with the room between them.
+        Vec3 sep{};
+        for (const auto& qq : players) {
+            if (!qq || qq.get() == &p || !qq->zombie || !qq->alive) continue;
+            const float dx = p.body.pos.x - qq->body.pos.x;
+            const float dy = p.body.pos.y - qq->body.pos.y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 < 1e-6f) {   // stood in the same skin: part by number
+                sep.x += (p.id & 1) != 0 ? 0.5f : -0.5f;
+                sep.y += (p.id & 2) != 0 ? 0.5f : -0.5f;
+                continue;
+            }
+            if (d2 >= 1.0f) continue;
+            const float d = std::sqrt(d2);
+            const float w = 1.0f - d;
+            sep.x += dx / d * w;
+            sep.y += dy / d * w;
+        }
+        if (horde->near_core(cx, cy, 2)) {
+            // It bites, it does not walk - but it still shuffles its
+            // neighbours out of its skin.
+            const float sl = std::sqrt(sep.x * sep.x + sep.y * sep.y);
+            if (sl > 0.15f) {
+                p.body.ori = Vec3{sep.x / sl, sep.y / sl, 0.0f};
+                p.input.mf = true;
+            }
+            return;
+        }
         const Player* ahead =
             p.ahead_id >= 0 ? players[static_cast<size_t>(p.ahead_id)].get() : nullptr;
         if (ahead && ahead->id != p.id && ahead->zombie && ahead->alive) {
@@ -1164,6 +1193,20 @@ struct Server::Impl {
                     p.body.ori = Vec3{dx / l, dy / l, 0.0f};
                     p.input.mf = true;
                 }
+            }
+        }
+        // The shuffle apart, folded into the facing: a walker veers a step
+        // out of a knot, a standstill in reach of its own becomes the
+        // shuffle outright. Politeness stands aside for a blocked spade -
+        // one that has begun to swing at a wall digs its way out instead.
+        const float sl = std::sqrt(sep.x * sep.x + sep.y * sep.y);
+        if (sl > 0.15f && p.stuck_at < 0.0) {
+            const float ox = p.body.ori.x + sep.x * 0.7f;
+            const float oy = p.body.ori.y + sep.y * 0.7f;
+            const float ol = std::sqrt(ox * ox + oy * oy);
+            if (ol > 1e-3f) {
+                p.body.ori = Vec3{ox / ol, oy / ol, 0.0f};
+                p.input.mf = true;
             }
         }
         // The unstick. Progress is measured flat, over the ground it stands

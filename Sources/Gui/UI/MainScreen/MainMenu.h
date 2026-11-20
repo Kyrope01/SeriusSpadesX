@@ -156,9 +156,11 @@ namespace spades {
 			std::vector<ui::Button*> scenarioButtons;
 			std::vector<ui::Button*> weaponButtons;
 			ui::Button* highlightButton = nullptr;
+			ui::Button* hordeButton = nullptr;
 			void ShowTraining();
 			void RefreshTrainingPanel();
 			void StartAimScenario(int scenario);
+			void StartHorde();
 			/** Joins the course once its server listens, or says why it did not. */
 			void PollTraining();
 			ui::SimpleTabStrip* tabStrip = nullptr;

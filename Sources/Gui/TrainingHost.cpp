@@ -29,6 +29,11 @@
 #include <Training/Server.h>
 
 DEFINE_SPADES_SETTING(cg_localPort, "32890");
+// Horde: the .vxl it plays, or none for the generated training map, and the
+// cell the core stands on (moved to the nearest land when that is at sea).
+DEFINE_SPADES_SETTING(cg_hordeMap, "");
+DEFINE_SPADES_SETTING(cg_hordeCoreX, "256");
+DEFINE_SPADES_SETTING(cg_hordeCoreY, "256");
 
 namespace spades {
 	namespace gui {
@@ -113,12 +118,17 @@ namespace spades {
 			Impl* self = impl.get();
 			const int listenPort = port;
 			const Launch run = what;
-			impl->thread = std::thread([self, listenPort, run]() {
+			const std::string hordeMap = (std::string)cg_hordeMap;
+			const int hordeCoreX = (int)cg_hordeCoreX, hordeCoreY = (int)cg_hordeCoreY;
+			impl->thread = std::thread([self, listenPort, run, hordeMap, hordeCoreX, hordeCoreY]() {
 				host::HostConfig cfg;
 				cfg.port = static_cast<uint16_t>(listenPort);
 				cfg.mode = run.mode;
 				cfg.scenario = run.scenario;
 				cfg.highlight_targets = run.highlight;
+				cfg.map_file = hordeMap;
+				cfg.core_x = hordeCoreX;
+				cfg.core_y = hordeCoreY;
 				cfg.aim = self->aim;
 				cfg.log = [](const std::string& line) { SPLog("[Training] %s", line.c_str()); };
 				try {

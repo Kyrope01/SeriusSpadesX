@@ -25,6 +25,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <random>
@@ -398,10 +399,52 @@ struct Server::Impl {
     }
 
     // --- the map ----------------------------------------------------------
-    void load_map() {
+    // The horde's map: the .vxl the settings name, or the built course.
+    bool load_map(std::string& err) {
+        if (horde_mode() && !cfg.map_file.empty()) {
+            std::ifstream in(cfg.map_file, std::ios::binary);
+            if (!in) {
+                err = "cannot open the map file: " + cfg.map_file;
+                return false;
+            }
+            std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)),
+                                      std::istreambuf_iterator<char>());
+            if (data.empty()) {
+                err = "the map file is empty: " + cfg.map_file;
+                return false;
+            }
+            if (!map.load_vxl(data.data(), data.size(), err)) return false;
+            map.to_solid_map(phys_map);
+            return true;
+        }
         generate_training_map(map);
         generate_aim_arena(map, static_cast<int>(cfg.scenario));
         map.to_solid_map(phys_map);
+        return true;
+    }
+    // The nearest land column to (x, y): the one asked for when its bedrock
+    // layer is solid, and the first land found scanning rings out otherwise
+    // - a core or a spawn offshore would stand in the water.
+    void nearest_land(int& x, int& y) const {
+        const auto land = [this](int cx, int cy) { return map.solid(cx, cy, 62); };
+        const int cx = std::min(std::max(x, 2), 509), cy = std::min(std::max(y, 2), 509);
+        x = cx;
+        y = cy;
+        if (land(cx, cy)) return;
+        for (int r = 1; r <= 509; ++r) {
+            for (int dx = -r; dx <= r; ++dx) {
+                const int px = cx + dx;
+                if (px < 0 || px > 511 || cx != px && false) continue;
+                if (cy - r >= 0 && land(px, cy - r)) { x = px; y = cy - r; return; }
+                if (cy + r <= 511 && land(px, cy + r)) { x = px; y = cy + r; return; }
+            }
+            for (int dy = -r + 1; dy <= r - 1; ++dy) {
+                const int py = cy + dy;
+                if (py < 0 || py > 511) continue;
+                if (cx - r >= 0 && land(cx - r, py)) { x = cx - r; y = py; return; }
+                if (cx + r <= 511 && land(cx + r, py)) { x = cx + r; y = py; return; }
+            }
+        }
     }
     bool aim_mode() const { return cfg.mode == training::Mode::Aim; }
     bool horde_mode() const { return cfg.mode == training::Mode::Horde; }
@@ -1867,7 +1910,8 @@ bool Server::start(std::string& err) {
     // call and the game's do not undo each other.
     if (enet_initialize() != 0) { err = "cannot start networking"; return false; }
     s.enet_up = true;
-    s.load_map();
+    std::string map_err;
+    if (!s.load_map(map_err)) { err = map_err; return false; }
     if (s.aim_mode()) {
         s.aim.scenario = s.cfg.scenario;
         s.add_aim_bots();

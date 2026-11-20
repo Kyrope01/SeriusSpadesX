@@ -718,6 +718,11 @@ namespace spades {
 					RefreshTrainingPanel();
 				});
 				y += bh + gap * 2.0F;
+				label(_Tr("MainScreen", "Horde: waves of the walking dead, from the map's"
+								                        " corners to a core you defend"), 26.0F,
+				      MakeVector4(0.45F, 0.85F, 0.45F, 1.0F));
+				hordeButton = button(x, bw, [this] { StartHorde(); });
+				y += bh + gap;
 				ui::Button* back = button(x, bw, [this] { ShowHome(); });
 				back->caption = _Tr("MainScreen", "Back");
 			}
@@ -855,6 +860,8 @@ namespace spades {
 			highlightButton->caption = (int)cg_aimHighlight
 			                             ? _Tr("MainScreen", "Highlight targets: on")
 			                             : _Tr("MainScreen", "Highlight targets: off");
+			if (hordeButton)
+				hordeButton->caption = _Tr("MainScreen", "Horde");
 		}
 
 		void MainScreenMainMenu::StartAimScenario(int scenario) {
@@ -864,6 +871,12 @@ namespace spades {
 			  std::min(std::max(scenario, 0), training::kScenarioCount - 1));
 			launch.weapon = std::min(std::max((int)cg_aimWeapon, 0), 2);
 			launch.highlight = (int)cg_aimHighlight != 0;
+			StartTraining(launch);
+		}
+
+		void MainScreenMainMenu::StartHorde() {
+			TrainingHost::Launch launch;
+			launch.mode = training::Mode::Horde;
 			StartTraining(launch);
 		}
 

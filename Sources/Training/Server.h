@@ -39,6 +39,10 @@ struct HostConfig {
     training::Scenario scenario = training::Scenario::Gridshot;
     // Aim: outline the targets (a Teamplay mark), through walls too.
     bool highlight_targets = false;
+    // Horde: a .vxl map to play instead of the generated course, and the cell
+    // the core stands on (moved to the nearest land when that cell is at sea).
+    std::string map_file;
+    int core_x = 256, core_y = 256;
     // Aim: the run's status for the HUD, and its restart requests. Shared with
     // the game, which runs this server on a thread of its own.
     std::shared_ptr<training::AimShared> aim;

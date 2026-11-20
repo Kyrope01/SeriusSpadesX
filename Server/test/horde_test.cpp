@@ -110,10 +110,15 @@ void test_field() {
         rough.set_block(210, 210, 31, true);
         rough.set_block(210, 210, 30, true);
         rough.set_block(210, 210, 29, true);
-        // A shallow pit at (220, 220): four down is a walk-in.
+        // A shallow pit at (220, 220): four down is a walk-in. The slab is
+        // taken out first - the blocks below are what a pit is floored with.
+        rough.set_block(220, 220, 33, false);
+        rough.set_block(220, 220, 32, false);
         rough.set_block(220, 220, 37, true);
         rough.set_block(220, 220, 36, true);
         // A deep pit at (230, 230): six down is a fall nobody leaves.
+        rough.set_block(230, 230, 33, false);
+        rough.set_block(230, 230, 32, false);
         rough.set_block(230, 230, 39, true);
         rough.set_block(230, 230, 38, true);
         horde::Horde hh(rough, horde_cfg(256, 256));

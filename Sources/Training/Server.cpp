@@ -1210,8 +1210,18 @@ struct Server::Impl {
                 (!p.body.airborne && horde->next_step(cx, cy, fz, tx, ty)) ||
                 horde->next_step(cx, cy, tx, ty);
             if (led) {
-                const float dx = static_cast<float>(tx) - p.body.pos.x;
-                const float dy = static_cast<float>(ty) - p.body.pos.y;
+                // The cell handed back is a square the legs are steered into,
+                // so it is its CENTRE they make for - never its corner. A
+                // corner is the point four cells meet at, a line's width of
+                // nowhere that belongs to no step: a walker aimed there
+                // crosses the boundary as it arrives, becomes the next cell's
+                // to advise, is handed a corner its own side of the line,
+                // and paces across the crossing forever - there and back,
+                // moving all the while, never a cell nearer. The centre is
+                // one cell's own ground: once set foot in, the next advice
+                // is read from inside it, and the walk goes on.
+                const float dx = static_cast<float>(tx) + 0.5f - p.body.pos.x;
+                const float dy = static_cast<float>(ty) + 0.5f - p.body.pos.y;
                 const float l = std::sqrt(dx * dx + dy * dy);
                 if (l > 1e-3f) {
                     p.body.ori = Vec3{dx / l, dy / l, 0.0f};
@@ -1274,7 +1284,6 @@ struct Server::Impl {
             if (moved < 0.35f ||
                 p.stall_windows >= kZombieYoyoWindows) {
                 if (p.stuck_at < 0.0) p.stuck_at = world_time;
-                p.input.jump = true;
                 // The fling. The reading crosses steps two blocks tall at
                 // the price of a jump, and a jump alone was never going to
                 // clear one pressed against its face - the hop rises a
@@ -1285,13 +1294,21 @@ struct Server::Impl {
                 // the way out until the next try. Every walker has the
                 // same fling in it, the pack's head as much as its heel:
                 // where the leader is flung the whole line goes after.
+                //
+                // The fling is the whole jump of its tick: the step's own
+                // jump gate writes its smaller hop over any velocity the
+                // key asks with, so on the tick the lunge flies the key
+                // is held back - flung once, the hop resumes next window.
+                bool flung = false;
                 if (world_time - p.stuck_at >= kPounceWindup &&
                     world_time - p.pounce_at >= kPounceAgain && !p.body.airborne) {
                     p.body.vel.z = kDeadPounce;
                     p.body.vel.x += p.body.ori.x * 0.15f;
                     p.body.vel.y += p.body.ori.y * 0.15f;
                     p.pounce_at = world_time;
+                    flung = true;
                 }
+                if (!flung) p.input.jump = true;
             } else {
                 p.stuck_at = -1.0;
             }
@@ -1397,7 +1414,7 @@ struct Server::Impl {
                                Vec3{static_cast<float>(c.x) + 0.5f,
                                     static_cast<float>(c.y) + 0.5f,
                                     static_cast<float>(c.z) - 0.35f},
-                               static_cast<uint8_t>(1), r, g, b, 0xE0,
+                               static_cast<uint8_t>(1), r, g, b, 0xE8,
                                kStay, kThins, static_cast<uint8_t>(0));
             for (auto& o : players)
                 if (o && o->peer && !o->loading && o->ext_smoke && o->playing()) send(*o, bw);

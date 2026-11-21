@@ -165,25 +165,30 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
     }
 }
 
-// Is any cell of ANY corner's box on the walk? The veto holds out the block
-// that would seal the last way in, so every corner the map names is asked,
-// whatever order the waves have been walking them in; a way in nobody walks
-// is not the veto's to protect.
+// Can a wave still walk in? The anchors are the far end of the walk within
+// kSpawnSearch rings of the corners, so that is the reach the veto
+// protects: with the candidate block held out, does the walk still stand
+// on one cell a wave could raise from, anywhere in a corner's reach?
+// Every corner the map names is asked whole, whatever order the waves have
+// been walking them in; a way in nobody can anchor is not the veto's to
+// protect.
 bool Horde::reach_spawn(const std::vector<int32_t>& dist) const {
-    for (int k = 0; k < 4; ++k) {
-        const int sx = cfg_.spawn_x[k], sy = cfg_.spawn_y[k];
-        const int n = cfg_.spawn_size;
-        int found = 0;
-        for (int dy = -n / 2; dy <= n / 2 && !found; ++dy)
-            for (int dx = -n / 2; dx <= n / 2; ++dx) {
-                const int x = sx + dx, y = sy + dy;
-                if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) continue;
-                if (dist[cell_index(x, y)] != kUnreachable) {
-                    found = 1;
-                    break;
+    const auto on_walk = [&](int x, int y) {
+        if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
+        return dist[cell_index(x, y)] != kUnreachable;
+    };
+    for (int c = 0; c < 4; ++c) {
+        const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
+        for (int r = 0; r < Config::kSpawnSearch; ++r) {
+            for (int y = cy - r; y <= cy + r; ++y) {
+                if (y == cy - r || y == cy + r) {
+                    for (int x = cx - r; x <= cx + r; ++x)
+                        if (on_walk(x, y)) return true;
+                } else if (on_walk(cx - r, y) || on_walk(cx + r, y)) {
+                    return true;
                 }
             }
-        if (found) return true;
+        }
     }
     return false;
 }
@@ -326,12 +331,18 @@ bool Horde::can_build(int x, int y, int z) {
 
 // --- the waves ----------------------------------------------------------------
 
-// A wave walks in from wherever the walk reaches. Every corner is
-// asked for its anchor: the nearest cell of the walk at its ring's ground
-// level - never a perch above it - scanned out ring by ring to kSpawnSearch. The corners a real map names
-// sit in border mountains and sea, and a zombie planted on a ledge the walk
-// never touches walks the ledge forever: a corner with no anchor within
-// reach is skipped, and its share of the wave is simply not raised.
+// A wave walks in from the far end of the walk. Every corner is asked for
+// its anchor: the scan sweeps the rings around its asked-for centre out to
+// kSpawnSearch and keeps the ground-level cell the field reaches LAST -
+// the walk's frontier. The nearest cell of the walk could sit inside the
+// very town the core is defended in, a jump from the gate, and such a
+// wave never rings the walls nor walks a way worth painting; the frontier
+// is where the legs run out, the feet of the border cliffs and the
+// outside of whatever walls the map raises around the core, and the wave
+// walks in from there. The corners a real map names
+// sit in border mountains and sea, and a corner whose whole reach the
+// walk never touches has no anchor, and its share of the wave is simply
+// not raised.
 //
 // The corners are then RANKED by the way the walk reads into each: the
 // route traced from an anchor either ends at the core's doorstep or dies
@@ -353,31 +364,42 @@ void Horde::place_wave(double now) {
     auto stands = [&](int x, int y) {
         return walkable(x, y) && dist_[cell_index(x, y)] >= 0;
     };
-    // The anchors, all four corners: the nearest cells of the walk, one
-    // ring at a time out to kSpawnSearch. A ring can stand at many heights -
-    // a skirt of cliff over the plain, a canopy over open ground - and a
-    // wave begun on the highest of its cells lands in foliage its legs
-    // cannot cross: the anchor takes the first cell of the ring that stands
-    // at the ring's own ground level, the height most of its cells stand
-    // at, and never one perched more than kWalkDrop above it.
+    // The anchors, all four corners: the far end of the walk, the frontier.
+    // The scan sweeps the rings around each corner's asked-for centre out
+    // to kSpawnSearch and keeps the cell the field reaches LAST, the walk's
+    // longest way in, wherever the terrain stops the legs. A ring can
+    // stand at many heights - a skirt of cliff over the plain, a canopy
+    // over open ground - and a wave begun on a perch lands in foliage its
+    // legs cannot cross, so only the cells at the ring's own ground
+    // level, the height most of its cells stand at, are candidates, never
+    // one perched more than kWalkDrop above it. Ties keep the first cell
+    // the scan reads.
     std::vector<int> rungs_x, rungs_y, rungs_g;
+    const auto note = [&](int x, int y) {
+        if (!stands(x, y)) return;
+        rungs_x.push_back(x);
+        rungs_y.push_back(y);
+        rungs_g.push_back(ground(x, y));
+    };
     for (int c = 0; c < 4; ++c) {
         anchor_x_[c] = -1;
         anchor_y_[c] = 0;
         const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
-        for (int r = 0; r < Config::kSpawnSearch && anchor_x_[c] < 0; ++r) {
+        int best_d = -1;
+        for (int r = 0; r < Config::kSpawnSearch; ++r) {
             rungs_x.clear();
             rungs_y.clear();
             rungs_g.clear();
-            for (int dy = -r; dy <= r; ++dy)
-                for (int dx = -r; dx <= r; ++dx) {
-                    if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
-                    const int x = cx + dx, y = cy + dy;
-                    if (!stands(x, y)) continue;
-                    rungs_x.push_back(x);
-                    rungs_y.push_back(y);
-                    rungs_g.push_back(ground(x, y));
+            // The ring's cells in reading order: the full rows on the
+            // frame's top and bottom, the side pair between them.
+            for (int y = cy - r; y <= cy + r; ++y) {
+                if (y == cy - r || y == cy + r) {
+                    for (int x = cx - r; x <= cx + r; ++x) note(x, y);
+                } else {
+                    note(cx - r, y);
+                    note(cx + r, y);
                 }
+            }
             if (rungs_x.empty()) continue;
             // The ring's ground level: the height most of its candidates
             // stand at, ties to the lower ground.
@@ -394,9 +416,12 @@ void Horde::place_wave(double now) {
             }
             for (size_t k = 0; k < rungs_x.size(); ++k) {
                 if (std::abs(rungs_g[k] - level) > Config::kWalkDrop) continue;
-                anchor_x_[c] = rungs_x[k];
-                anchor_y_[c] = rungs_y[k];
-                break;
+                const int d = dist_[cell_index(rungs_x[k], rungs_y[k])];
+                if (d > best_d) {
+                    best_d = d;
+                    anchor_x_[c] = rungs_x[k];
+                    anchor_y_[c] = rungs_y[k];
+                }
             }
         }
     }

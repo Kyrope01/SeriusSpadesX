@@ -11,7 +11,9 @@
 // anything more than a jump up is a wall, for they do not dig. The veto
 // asks the same walk the other way round, with the block a player wants
 // held out of it, and the route the host paints is read off it cell by
-// cell.
+// cell. The waves walk in from the far end of the walk, the borderlands
+// the terrain stops the legs in: the anchor of a corner is the longest
+// way its reach holds.
 
 #include <algorithm>
 #include <cstdio>
@@ -172,15 +174,18 @@ void test_veto() {
         check(h.distance(32, 32) >= 0, "the plain crosses the ring through its gaps");
         check(h.can_build(266, 256, 31), "closing one of two gaps is allowed");
     }
-    // One ring, one gap: the gap is the only way in.
+    // One ring, one gap, dead in the cross the four corners' reach leaves
+    // empty: the gap is the only way in, and the veto refuses its brick -
+    // with the gap held out, no corner's reach stands anywhere on the
+    // walk.
     {
         SolidMap map;
         plain(map);
-        ring(map, Ring{100, 100, 6, 106, 100});
-        horde::Horde h(map, horde_cfg(100, 100));
-        check(h.can_build(105, 98, 31), "a block well inside the ring is allowed");
-        check(!h.can_build(106, 100, 31), "the last gap refuses its closing block");
-        check(!h.can_build(106, 100, 0) && !h.can_build(106, 100, 63),
+        ring(map, Ring{256, 256, 6, 262, 256});
+        horde::Horde h(map, horde_cfg(256, 256));
+        check(h.can_build(258, 258, 31), "a block well inside the ring is allowed");
+        check(!h.can_build(262, 256, 31), "the last gap refuses its closing block");
+        check(!h.can_build(262, 256, 0) && !h.can_build(262, 256, 63),
               "the veto asks the same question at every height");
     }
     // The ring shut for real: no climb, no dig, the walk is sealed out of
@@ -189,14 +194,14 @@ void test_veto() {
     {
         SolidMap map;
         plain(map);
-        ring(map, Ring{100, 100, 6, -1, -1});
-        horde::Horde h(map, horde_cfg(100, 100));
+        ring(map, Ring{256, 256, 6, -1, -1});
+        horde::Horde h(map, horde_cfg(256, 256));
         h.on_map_edited();
         h.tick(2.0);  // past the debounce: the recomputed field is shut out
-        check(h.distance(130, 100) < 0, "the shut ring walls the core off");
-        check(h.can_build(130, 100, 31), "with the core already sealed, the veto fails open");
+        check(h.distance(270, 256) < 0, "the shut ring walls the core off");
+        check(h.can_build(270, 256, 31), "with the core already sealed, the veto fails open");
         int tx = 0, ty = 0;
-        check(h.next_step(140, 100, tx, ty) && (tx != 140 || ty != 100),
+        check(h.next_step(270, 256, tx, ty) && (tx != 270 || ty != 256),
               "off the shut field, the fallback still moves a leg");
     }
 }
@@ -400,10 +405,11 @@ void test_route() {
         check(!h.wave_cleared(), "a wave at the cliff's foot is not cleared");
     }
     // The perch the wave refuses: a tower the field cannot climb stands on
-    // the corner's asked-for centre, its anchor ring holding both the
-    // mesa's top - poured onto, walkable, and on the field - and the plain
-    // below it. The wave begins on the plain, at the ring's ground level,
-    // never on a perch its legs would be trusted to fall from.
+    // the corner's asked-for centre, and the far end of its reach holds
+    // the mesa's poured top and the open plain alike. The wave anchors at
+    // the frontier of the walk, on the plain the frontier stands at -
+    // never the mesa's top, never the tower - for begun on a perch it
+    // lands in foliage the legs cannot cross.
     {
         SolidMap map;
         plain(map);
@@ -421,8 +427,8 @@ void test_route() {
         h.tick(10.5);
         int ax = -1, ay = -1;
         check(h.corner_anchor(0, ax, ay), "the corner anchors past its tower");
-        check(ax == 258 && ay == 257,
-              "the anchor stands on the plain, not on the mesa's poured top");
+        check(ax == 457 && ay == 457,
+              "the anchor is the far plain of the reach, not a poured perch");
     }
 }
 

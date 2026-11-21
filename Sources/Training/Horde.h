@@ -87,8 +87,10 @@ struct Config {
         return spawn_corners < 1 ? 1 : (spawn_corners > 4 ? 4 : spawn_corners);
     }
     // How far out from its asked-for centre a corner's spawn point may be
-    // sought, in rings: the corners a real map names sit in border mountains
-    // and sea, and only the field decides where a wave can walk in from.
+    // sought, in rings: the anchor of a wave is the FAR END of the walk
+    // inside that reach - the frontier, wherever the borderlands stop the
+    // legs - so the corners a real map names in mountains and sea only
+    // point at which quarter's border the wave walks in from.
     static constexpr int kSpawnSearch = 200;
 };
 
@@ -166,10 +168,11 @@ public:
     // Whether a cell is within `cells` of the core, where the zombies bite.
     bool near_core(int x, int y, int cells) const;
 
-    // The anchor the last wave walked in from at `corner`: the nearest
-    // cell of the walk at its own ground level to the corner's asked-for
-    // centre, kept from the wave's placing. False when the corner never
-    // found its footing (a corner with no anchor raises nothing).
+    // The anchor the last wave walked in from at `corner`: the far end of
+    // the walk within kSpawnSearch rings of the corner's asked-for centre,
+    // at its own ground level, kept from the wave's placing. False when
+    // the corner's reach holds no footing (a corner with no anchor raises
+    // nothing).
     bool corner_anchor(int corner, int& x, int& y) const;
     // The way in from a cell, read off the walk: the cells one at a time,
     // each a legal crossing downhill, until the core's doorstep. The route

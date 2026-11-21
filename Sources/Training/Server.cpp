@@ -64,6 +64,9 @@ constexpr double kPingInterval = 1.0;
 constexpr float kTargetRespawn = 2.0f;
 // On the course a person is always blue; the targets are green.
 constexpr int kPeople = 0, kTargets = 1;
+// A zombie fresh out of the pile walks through its own for this long,
+// until the wave has settled into single file.
+constexpr double kZombieSettle = 5.0;
 
 double now_sec() {
     static const auto t0 = std::chrono::steady_clock::now();
@@ -298,6 +301,7 @@ struct Player {
     // Horde: one of the wave's walkers. Horde.h holds the brain, this holds
     // its legs and its teeth.
     bool zombie = false;
+    double born_at = -1e9;       // when it rose, for the pile's settle window
     double next_bite = 0.0;      // a bite a second once it has one to bite
     Vec3 walk_ref{};             // where it last stood, to catch a stuck one
     double walk_ref_at = 0.0;
@@ -1049,6 +1053,7 @@ struct Server::Impl {
         p->name = "Zombie";
         p->team = kTargets;
         p->zombie = true;
+        p->born_at = world_time;
         // Single file behind its corner's pack: a zombie with nobody to
         // follow is the pack's leader, and reads the field itself.
         const int corner = at.corner & 3;
@@ -1099,9 +1104,13 @@ struct Server::Impl {
         // The crowd: players pass through players in this game, so the horde
         // keeps itself apart - a soft push off any of its own inside one
         // block of reach, the weight fading with the room between them.
+        // A fresh one is spared for its first seconds: it walks out of the
+        // pile through its own, and they walk through it, until the wave
+        // has its shape back.
         Vec3 sep{};
         for (const auto& qq : players) {
             if (!qq || qq.get() == &p || !qq->zombie || !qq->alive) continue;
+            if (world_time - qq->born_at < kZombieSettle) continue;
             const float dx = p.body.pos.x - qq->body.pos.x;
             const float dy = p.body.pos.y - qq->body.pos.y;
             const float d2 = dx * dx + dy * dy;
@@ -1159,9 +1168,14 @@ struct Server::Impl {
         // out of a knot, a standstill in reach of its own becomes the
         // shuffle outright. Politeness stands aside for a stuck walker -
         // shuffling one off a wall it leans on would read as progress and
-        // unarm the hop, and the hop is the only way out it has.
+        // unarm the hop, and the hop is the only way out it has. It stands
+        // aside for the pack's head too: the field leads it, and the crowd
+        // it parts must never bend it, for the line behind goes where it
+        // goes. And it has not begun for a fresh one: it is still walking
+        // out of the pile it rose in.
         const float sl = std::sqrt(sep.x * sep.x + sep.y * sep.y);
-        if (sl > 0.15f && p.stuck_at < 0.0) {
+        if (p.ahead_id >= 0 && world_time - p.born_at >= kZombieSettle &&
+            sl > 0.15f && p.stuck_at < 0.0) {
             const float ox = p.body.ori.x + sep.x * 0.7f;
             const float oy = p.body.ori.y + sep.y * 0.7f;
             const float ol = std::sqrt(ox * ox + oy * oy);

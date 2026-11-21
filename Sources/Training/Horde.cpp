@@ -139,6 +139,24 @@ bool Horde::clear_of(int x, int y, int z) const {
     return true;
 }
 
+// The clearing a wave is born in: five cells square, four voxels high, the
+// whole square open above the floor at z. A body fits where it stands; the
+// clearing is the wave's room to be born scattered instead of stacked, and
+// to step out of in any direction the road reads. The map has no voxels
+// past its edges, so the square of a border cell is open to the sky on
+// that side.
+bool Horde::box_clear(int x, int y, int z) const {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
+    if (z < 4) return false;  // not the room above, even in the open sky
+    const uint64_t window = 0xFull << (z - 4);
+    for (int ny = y - kRoomHalf; ny <= y + kRoomHalf; ++ny)
+        for (int nx = x - kRoomHalf; nx <= x + kRoomHalf; ++nx) {
+            if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
+            if (map_.column(nx, ny) & window) return false;
+        }
+    return true;
+}
+
 // --- the field ---------------------------------------------------------------
 
 // Also see Horde.h. A walk from the core over the map's standing
@@ -447,25 +465,30 @@ bool Horde::can_build(int x, int y, int z) {
 // end waits behind whatever works; no anchor waits last. The wave comes
 // from the first corners of that order: systematically the way in the
 // terrain leaves, never a corner number the settings happened to name.
-// Back cells hold the anchor's rule, for rows of dozens reach past cliffs
-// onto ground their corner's first cell cannot see; the nearest fielded
-// cell of each row is taken, and a strip with none crowds onto the anchor.
-// The anchors are kept - the host traces the route it paints from them.
+// The wave is born in a clearing at the road's end: the road is walked
+// the way it runs, from its far end toward the core, and the first cell
+// that opens a floor the walk itself reaches, within two of the road's
+// own height there, under a square of five by five cells four voxels
+// high, names the site. The wave rises scattered on that square's
+// floors - the leader on the site, the rest each on a floor of its own
+// within two of the site's - and a road that nowhere finds its clearing
+// piles on the anchor's own floor, whatever room its neighbours give:
+// players pass through players in this game, and the crowd's push
+// splits the pile apart as it walks. The anchors are kept - the host
+// traces the route it paints from them.
 void Horde::place_wave(double now) {
     if (field_dirty_) recompute();
     const int n = cfg_.wave_zombies(wave_);
     const int nc = cfg_.active_corners();
-    // A cell the wave may be raised on: on the walk, and with a body's
-    // room around the very floor it would rise at. The walk is a plan of
-    // cells; a wave member has a body, and one born where the plan happens
-    // to reach but a body cannot stand - a pockets in a cliff face, the
-    // shelf under a lintel - is born inside a wall it never leaves.
+    // A cell the wave's road may run on: any standing surface the field
+    // reaches. The birthing room is asked elsewhere - of the clearing the
+    // site stands in, and of each member's own column and sides.
     auto stands = [&](int x, int y) {
         if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
         if (surf_count(x, y) <= 0) return false;
         const int32_t* d = &dist_[cell_index(x, y) * kSurfMax];
         for (int k = 0; k < kSurfMax; ++k)
-            if (d[k] >= 0 && clear_of(x, y, surface(x, y, k))) return true;
+            if (d[k] >= 0) return true;
         return false;
     };
     // The anchors, all four corners: the far end of the walk, the frontier.
@@ -563,57 +586,116 @@ void Horde::place_wave(double now) {
     // first few of them, however many the corners could raise.
     int ranks = 0;
     for (int r = 0; r < nc && ways[r].anchored; ++r) ++ranks;
-    // The wave stands up only where the walk truly comes in.
+    // The wave stands up only where the walk truly comes in, and it is
+    // born in a clearing, not in a pocket: the road is walked from its
+    // far end toward the core, and the first cell whose floor - one the
+    // walk itself reaches, within kRoomTol of the height the road runs
+    // at there, for a valloned map keeps no flats - opens a square of
+    // five by five cells, four voxels high, above it, names the site.
+    // Where no cell of the road does, the anchor's own floor is the
+    // site and its neighbours give what room they have: the pile.
+    struct Site {
+        bool found = false;
+        int x = 0, y = 0, z = 0;
+        std::vector<int> mx, my, mz;
+    };
+    Site sites[4];
+    static constexpr int kRoomTol = 2;  // a floor may sit this far off its cell's road height
+    const auto ground_of = [&](int x, int y) {
+        const int bk = best_state(x, y);
+        return bk >= 0 ? surface(x, y, bk) : surface(x, y, 0);
+    };
+    // The birthplaces inside the clearing: the site itself, then ring by
+    // ring every column of the square that carries its own floor within
+    // kRoomTol of the site's and a body's room standing on it - the road
+    // need not reach them; the leader leads them out.
+    const auto fill_site = [&](Site& s) {
+        s.mx.clear();
+        s.my.clear();
+        s.mz.clear();
+        s.mx.push_back(s.x);
+        s.my.push_back(s.y);
+        s.mz.push_back(s.z);
+        for (int r = 1; r <= kRoomHalf; ++r)
+            for (int dy = -r; dy <= r; ++dy)
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (dy > -r && dy < r && dx > -r && dx < r) continue;  // the ring only
+                    const int vx = s.x + dx, vy = s.y + dy;
+                    if (vx < 0 || vx >= kMapW || vy < 0 || vy >= kMapH) continue;
+                    int bz = -1, bo = 0;
+                    const int ns = surf_count(vx, vy);
+                    for (int k = 0; k < ns; ++k) {
+                        const int z2 = surface(vx, vy, k);
+                        const int off = z2 > s.z ? z2 - s.z : s.z - z2;
+                        if (off > kRoomTol) continue;
+                        if (!clear_of(vx, vy, z2)) continue;
+                        if (bz < 0 || off < bo) { bz = z2; bo = off; }
+                    }
+                    if (bz >= 0) {
+                        s.mx.push_back(vx);
+                        s.my.push_back(vy);
+                        s.mz.push_back(bz);
+                    }
+                }
+    };
+    const auto raise_site = [&](int c) {
+        Site& s = sites[c];
+        if (s.found) return;
+        s.found = true;
+        const int ax = anchor_x_[c], ay = anchor_y_[c];
+        s.x = ax;
+        s.y = ay;
+        s.z = ground_of(ax, ay);
+        std::vector<RouteCell> road;
+        if (trace_route(ax, ay, road)) {
+            for (const RouteCell& t : road) {
+                // This cell's floors the walk reaches, within kRoomTol of
+                // the road's own height there: the road's own level first,
+                // ties to the lower slot.
+                int cand[kSurfMax], off[kSurfMax], nf = 0;
+                for (int k = 0; k < kSurfMax; ++k) {
+                    const int cz = surface(t.x, t.y, k);
+                    if (cz < 0) break;
+                    if (dist_[cell_index(t.x, t.y) * kSurfMax + k] < 0) continue;
+                    const int o = cz > t.z ? cz - t.z : t.z - cz;
+                    if (o > kRoomTol) continue;
+                    int p = nf++;
+                    while (p > 0 && (off[p - 1] > o || (off[p - 1] == o && cand[p - 1] > cz))) {
+                        off[p] = off[p - 1];
+                        cand[p] = cand[p - 1];
+                        --p;
+                    }
+                    off[p] = o;
+                    cand[p] = cz;
+                }
+                bool found = false;
+                for (int q = 0; q < nf && !found; ++q) {
+                    if (!box_clear(t.x, t.y, cand[q])) continue;
+                    s.x = t.x;
+                    s.y = t.y;
+                    s.z = cand[q];
+                    found = true;
+                }
+                if (found) break;
+            }
+        }
+        fill_site(s);
+    };
     pending_.clear();
     for (int i = 0; i < n && ranks > 0; ++i) {
         const Ranked& way = ways[i % ranks];
-        const int corner = way.corner;
-        const int px = anchor_x_[corner], py = anchor_y_[corner];
-        // Zombies stagger out a few cells apart so they do not march in one
-        // column: wave member i/ranks stands back behind the anchor, on the
-        // side away from the core. Where no clear cell answers anywhere in
-        // the search, the member is raised on the anchor itself, in the
-        // pile: players pass through players in this game, and the crowd's
-        // push splits the pile apart as it walks.
-        const int back = i / ranks;
-        const int away = cfg_.core_y > py ? -1 : 1;
-        int sx = px, sy = py + back * away;
-        if (back > 0 && !stands(sx, sy)) {
-            int found = 0;
-            for (int r = 0; r <= cfg_.spawn_size && !found; ++r)
-                for (int dy = -r; dy <= r && !found; ++dy)
-                    for (int dx = -r; dx <= r && !found; ++dx) {
-                        const int wx = px + dx, wy = py + back * away + dy;
-                        if (!stands(wx, wy)) continue;
-                        sx = wx;
-                        sy = wy;
-                        found = 1;
-                    }
-            if (!found) { sx = px; sy = py; }
-        }
-        // The spawn stands on the floor the walk itself runs on - the
-        // anchor's best-reached surface, not the top of the column, so a
-        // wave raised beside a tunnel's mouth stands in the road, not on
-        // the wall's cap above it. The best floor is kept only where a
-        // body finds room; where it does not, the clear state nearest the
-        // core is taken instead.
-        const auto stand_z = [&](int x, int y) {
-            int bk = best_state(x, y);
-            if (bk < 0 || !clear_of(x, y, surface(x, y, bk))) {
-                int bd = kUnreachable;
-                bk = -1;
-                const int32_t* d = &dist_[cell_index(x, y) * kSurfMax];
-                for (int k = 0; k < kSurfMax; ++k) {
-                    if (d[k] < 0 || !clear_of(x, y, surface(x, y, k))) continue;
-                    if (bk < 0 || d[k] < bd) { bd = d[k]; bk = k; }
-                }
-                if (bk < 0) bk = 0;  // nowhere clear: raised in the pile
-            }
-            return surface(x, y, bk);
-        };
-        SpawnAt s{sx, sy, back > 0 ? stand_z(sx, sy) : stand_z(px, py),
-                  now + i * cfg_.spawn_interval, corner};
-        pending_.push_back(s);
+        raise_site(way.corner);
+        const Site& s = sites[way.corner];
+        // The leader takes the site itself and its road; the rest fill
+        // the clearing around it, and only when the clearing runs out of
+        // floors does one pile on another - never on the leader, whom
+        // the whole wave follows.
+        const size_t nm = s.mx.size();
+        size_t mi = 0;
+        if (i > 0 && nm > 1) mi = 1 + static_cast<size_t>((i - 1) % (static_cast<int>(nm) - 1));
+        SpawnAt a{s.mx[mi], s.my[mi], s.mz[mi],
+                  now + i * cfg_.spawn_interval, way.corner};
+        pending_.push_back(a);
     }
     std::sort(pending_.begin(), pending_.end(),
               [](const SpawnAt& a, const SpawnAt& b) { return a.at < b.at; });

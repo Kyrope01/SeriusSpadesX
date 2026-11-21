@@ -48,10 +48,11 @@ enum class Phase {
 struct Config {
     // The cell the zombies walk to.
     int core_x = 256, core_y = 256;
-    // The corners zombies come from: the centre of each corner's spawn box.
+    // The corners zombies come from: the centre of each corner's reach.
     int spawn_x[4] = {32, 479, 32, 479};
     int spawn_y[4] = {32, 32, 479, 479};
-    int spawn_size = 12;  // a spawn box is this many cells square
+    // The spawn box width of earlier days; the clearing is five by five now.
+    int spawn_size = 12;
     double prep_seconds = 20.0;
     double intermission_seconds = 12.0;
     // Zombies trickle out, not all at once.
@@ -100,8 +101,9 @@ struct Config {
     static constexpr int kSpawnSearch = 200;
 };
 
-// One zombie due at `at`, at a cell that was walkable when its wave began.
-// `corner` is the spawn box it comes from: the wave walks as one pack per
+// One zombie due at `at`, born standing on a floor of its corner's
+// clearing - the site's own floor, or one of the square's around it.
+// `corner` is the corner it comes from: the wave walks as one pack per
 // corner, the first out in front and the rest following it.
 struct SpawnAt {
     int x, y, z;
@@ -198,6 +200,10 @@ private:
     // this is not stood on today.
     static constexpr int kSurfMax = 4;
 
+    // The clearing a wave is born in: this many cells each way around the
+    // site (so five by five), four voxels high.
+    static constexpr int kRoomHalf = 2;
+
     void recompute();
     int ground(int x, int y);
     // One cell's standing surfaces: every solid run top with the two voxels
@@ -210,10 +216,15 @@ private:
     int surface(int x, int y, int k);
     int best_state(int x, int y) const;
     // A body's standing room at the given floor: the walk demands two open
-    // voxels, the dead stand four tall and ask leave to step. The spawn
-    // cells ask it of their own column and of every side, so no wave member
-    // rises inside a wall.
+    // voxels, the dead stand four tall and ask leave to step. A birthplace
+    // asks it of its own column and of every side, so no wave member rises
+    // inside a wall.
     bool clear_of(int x, int y, int z) const;
+    // The clearing a wave is born in: five cells square, four voxels
+    // high, every column of the square open above the floor at z. The
+    // road names its site; the square gives the wave its room - the map
+    // has no voxels past its edges, so a border cell's missing side is sky.
+    bool box_clear(int x, int y, int z) const;
     bool reach_spawn(const std::vector<int32_t>& dist) const;
     void flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig);
     void begin_wave(double now);

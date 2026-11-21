@@ -1305,8 +1305,11 @@ struct Server::Impl {
             // until the rear has truly closed inside kFileClosed - a
             // hold that lets go the moment the rear slips back under the
             // line it opened on keeps the line hovering loose forever.
-            const bool far = rear_d > (p.wait_since >= 0.0 ? kFileClosed : kFileApart);
-            waits = far || rear->waits_file;
+            // (Not named "far": windows.h empties that word out from
+            // under MSVC, its sixteen-bit legacy still a compiler error
+            // today.)
+            const bool trailing = rear_d > (p.wait_since >= 0.0 ? kFileClosed : kFileApart);
+            waits = trailing || rear->waits_file;
             if (world_time < p.file_free_at) waits = false;
             if (waits && p.wait_since < 0.0) p.wait_since = world_time;
             if (!waits) p.wait_since = -1e9;

@@ -305,9 +305,9 @@ struct Player {
     // Its pack: the zombie it follows in single file, or -1 when it reads
     // the field itself - the pack's leader, or the last of a broken line.
     int ahead_id = -1;
-    // When it stopped making progress, and when its spade may swing again:
-    // a stuck one digs, out of the floor ahead.
-    double stuck_at = -1.0, dig_at = 0.0;
+    // When it stopped making progress: a stuck one jumps for a way out; the
+    // spade is out of its hands while the dead walk.
+    double stuck_at = -1.0;
 
     bool spectator() const { return team == -1; }
     bool playing() const { return named && (team == 0 || team == 1); }
@@ -493,6 +493,10 @@ struct Server::Impl {
     // streams its wave: one marker every few seconds survives a client's
     // map load, which a single early ping never did.
     double corner_ping_next[4] = {0.0, 0.0, 0.0, 0.0};
+    // When the way in is next traced and painted again while the wave
+    // streams: the world is built on while the dead walk it, and the line
+    // on the ground that was true at the first note will not stay true.
+    double route_paint_next = 0.0;
     void serve_maps() {
         if (job_running && job_done.load()) {
             map_job.join();
@@ -754,7 +758,6 @@ struct Server::Impl {
             p.net_input = 0;
             p.swing_shown = false;
             p.stuck_at = -1.0;
-            p.dig_at = 0.0;
             p.alive = true;
             p.tool = kToolWeapon;
             if (p.zombie) p.tool = kToolSpade;   // it never fires a shot
@@ -1084,54 +1087,11 @@ struct Server::Impl {
         broadcast(bw, false);
     }
 
-    // Its spade: the wall the pack is jammed against loses its top, one swing
-    // at a time the way a player's does, until what is left is a jump. The
-    // tallest standing block ahead comes off first, whatever blocks the pack -
-    // terrain, a tower - and only the one at the face has solid ground to
-    // swing at; the ones behind it swing at nothing and wait.
-    bool dig_ahead(Player& p) {
-        const int x = static_cast<int>(std::floor(p.body.pos.x));
-        const int y = static_cast<int>(std::floor(p.body.pos.y));
-        // The face it leans on: one column dead ahead, the dominant way it
-        // faces. A diagonal aims where it mostly looks.
-        int dx = p.body.ori.x >= 0.5f ? 1 : (p.body.ori.x <= -0.5f ? -1 : 0);
-        int dy = p.body.ori.y >= 0.5f ? 1 : (p.body.ori.y <= -0.5f ? -1 : 0);
-        if (dx != 0 && dy != 0) {
-            if (std::abs(p.body.ori.x) >= std::abs(p.body.ori.y)) dy = 0;
-            else dx = 0;
-        }
-        const int fx = x + dx, fy = y + dy;
-        if (fx == x && fy == y) return false;
-        if (!VoxelMap::valid(fx, fy, 1)) return false;
-        int g = -1;   // its own floor: the top of the column it stands on
-        int zf = -1;  // the front column's standing block, its very top
-        for (int z = 0; z < 62; ++z) {
-            if (g < 0 && map.solid(x, y, z)) g = z;
-            if (zf < 0 && map.solid(fx, fy, z)) zf = z;
-            if (g >= 0 && zf >= 0) break;
-        }
-        // Nothing under its feet or ahead, or the climb is already a jump:
-        // the blockage is not a wall, and spades make no bridges.
-        if (g < 1 || zf < 1) return false;
-        if (zf >= g - horde->config().kWalkClimb) return false;
-        if (core_column_cell(fx, fy, zf)) return false;   // the core holds
-        std::vector<Cell> removed;
-        map.destroy_point(fx, fy, zf, &removed);
-        touched(removed, false);
-        ByteWriter bw;
-        bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
-        bw.write_u8(static_cast<uint8_t>(p.id));
-        bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
-        bw.write_i32(fx);
-        bw.write_i32(fy);
-        bw.write_i32(zf);
-        broadcast(bw, true);
-        return true;
-    }
-
     // A zombie's mind: its pack walks one path - it holds at the heel of the
     // zombie in front, and the one at the head reads the field, towards the
-    // core. A stuck one jumps, and when jumping does not help, it digs.
+    // core. The field is the walk without the spade - stairs, ramps and
+    // notches, never a wall hacked through - and a stuck one jumps for the
+    // step it could not make.
     void steer_zombie(Player& p) {
         p.input = physics::Input{};
         const int cx = static_cast<int>(std::floor(p.body.pos.x));
@@ -1197,8 +1157,9 @@ struct Server::Impl {
         }
         // The shuffle apart, folded into the facing: a walker veers a step
         // out of a knot, a standstill in reach of its own becomes the
-        // shuffle outright. Politeness stands aside for a blocked spade -
-        // one that has begun to swing at a wall digs its way out instead.
+        // shuffle outright. Politeness stands aside for a stuck walker -
+        // shuffling one off a wall it leans on would read as progress and
+        // unarm the hop, and the hop is the only way out it has.
         const float sl = std::sqrt(sep.x * sep.x + sep.y * sep.y);
         if (sl > 0.15f && p.stuck_at < 0.0) {
             const float ox = p.body.ori.x + sep.x * 0.7f;
@@ -1210,9 +1171,10 @@ struct Server::Impl {
             }
         }
         // The unstick. Progress is measured flat, over the ground it stands
-        // on: a hop against a wall gains none, so the spade does not wait on
-        // where in its bounce the clock samples it, and a wall of six costs
-        // a few seconds of swinging, not a pack parked forever.
+        // on: a hop against a step gains none, so the jump does not wait on
+        // where in its bounce the clock samples it. The walk's own answer to
+        // a standstill is the hop; the spade that took walls down is out of
+        // the dead's hands while the walk proves itself.
         if (world_time - p.walk_ref_at >= 0.5) {
             const float moved = std::fabs(p.body.pos.x - p.walk_ref.x) +
                                 std::fabs(p.body.pos.y - p.walk_ref.y);
@@ -1221,17 +1183,6 @@ struct Server::Impl {
             if (moved < 0.35f) {
                 if (p.stuck_at < 0.0) p.stuck_at = world_time;
                 p.input.jump = true;
-                // A second of hopping that bought no ground: swing at the
-                // way in. The field still says where the way in lies, and
-                // the swing takes the front column down a block at a time.
-                if (world_time - p.stuck_at >= 1.0 && world_time >= p.dig_at) {
-                    if (dig_ahead(p)) {
-                        p.dig_at = world_time + 0.5;
-                        show_swing(p, 0.35);
-                    } else {
-                        p.dig_at = world_time + 0.4;
-                    }
-                }
             } else {
                 p.stuck_at = -1.0;
             }
@@ -1287,6 +1238,50 @@ struct Server::Impl {
             if (o && o->peer && !o->loading && o->ext_teamplay && o->playing()) send(*o, bw);
     }
 
+    // The way in, painted on the ground: the route the walk traced from the
+    // wave's anchor, its every tread's surface block recoloured. The block
+    // is set where a block already stands - the world carries no hole it
+    // did not have and no walker is sealed in - so the line is the ground
+    // itself, and a client that loads late finds the whole trail baked
+    // into the map it is sent. Repainted on a clock while the wave streams:
+    // the world is built on under the dead, and the line true at the first
+    // note will not stay true; a repaint touches only the treads the
+    // world has not already. The trail's author is id 255, nobody's slot:
+    // its colour is told once a repaint, and each tread goes out as a
+    // placed block against that colour.
+    void paint_route() {
+        int ax = 0, ay = 0;
+        if (!horde->corner_anchor(0, ax, ay)) return;
+        std::vector<horde::RouteCell> cells;
+        if (!horde->trace_route(ax, ay, cells)) return;
+        constexpr uint32_t kOrange = 0xFF8000;
+        const uint32_t argb = 0x7F000000u | kOrange;
+        bool told_color = false;
+        for (const horde::RouteCell& c : cells) {
+            const int z = map.get_z(c.x, c.y);
+            if (z < 1 || z >= 62) continue;      // the bed the whole map stands on
+            if (core_column_cell(c.x, c.y, z)) continue;   // the core holds
+            if (map.color(c.x, c.y, z) == argb) continue;   // already on the line
+            if (!map.build_point(c.x, c.y, z, argb)) continue;
+            if (!told_color) {
+                told_color = true;
+                ByteWriter cb;
+                cb.write_u8(static_cast<uint8_t>(PacketId::SetColor));
+                cb.write_u8(255);
+                write_color(cb, kOrange);
+                broadcast(cb, true);
+            }
+            ByteWriter bw;
+            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+            bw.write_u8(255);
+            bw.write_u8(static_cast<uint8_t>(kBuildBlock));
+            bw.write_i32(c.x);
+            bw.write_i32(c.y);
+            bw.write_i32(z);
+            broadcast(bw, true);
+        }
+    }
+
     // The wave's announcements, its spawns, and its dead slots given back.
     void horde_tick() {
         horde->tick(world_time);
@@ -1297,11 +1292,13 @@ struct Server::Impl {
                 case horde::Phase::Wave:
                     if (horde->wave() > horde_wave_told) {
                         horde_wave_told = horde->wave();
-                        // New packs, their pings due right away.
+                        // New packs, their pings due right away, and the
+                        // way in painted before the first tread is walked.
                         for (int k = 0; k < 4; ++k) {
                             pack_tail[k] = -1;
                             corner_ping_next[k] = 0.0;
                         }
+                        route_paint_next = 0.0;
                         char text[96];
                         std::snprintf(text, sizeof text, "Wave %d: %d zombies coming",
                                       horde->wave(), horde->config().wave_zombies(horde->wave()));
@@ -1324,6 +1321,13 @@ struct Server::Impl {
                 case horde::Phase::Prep:
                     break;
             }
+        }
+        // While the walk streams, its line on the ground is retraced and
+        // repainted every so often: what the world has moved under the
+        // dead, the next coat tells straight.
+        if (horde->phase() == horde::Phase::Wave && world_time >= route_paint_next) {
+            route_paint_next = world_time + 30.0;
+            paint_route();
         }
         std::vector<horde::SpawnAt> due;
         while (horde->take_due(due, world_time)) {

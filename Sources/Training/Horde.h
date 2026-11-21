@@ -9,17 +9,20 @@
 // The field is one walk from the core over walkable cells (its ground level
 // and the headroom above), recomputed a short debounce after every edit; a
 // zombie steps to the neighbour whose distance is lowest, which is a cheapest
-// path around whatever has been built since. That walk prices a dig: a climb
-// beyond the jump costs the blocks the spade must take off, so the field
-// prefers the way round and only leads into walls thin enough to matter. The
-// veto asks the field's stricter question the other way round: with the cell
-// a player wants to build at taken as unwalkable, is there still a route a
+// path around whatever has been built since. For now the dead walk and do not
+// dig: the walk prices only what legs can cross - a climb of kWalkClimb is a
+// jump and a drop of kWalkDrop a fall, and anything more is a wall - so the
+// field finds the stairs and the ramps, the way every walker takes. The veto
+// asks the field's own question the other way round: with the cell a player
+// wants to build at taken as unwalkable, is there still a route a
 // jump-fearing, fall-counting walker could take from a spawn corner to the
 // core?  If not, and there was one before, that block would seal the last
 // way in, and is refused. When the map is already sealed (or the field is
 // out of date), the veto fails open and the tower stands or falls as the
-// player builds it; the horde's own teeth are not the strict walk, and a
-// sealed world is one the spades open eventually.
+// player builds it; a sealed world stays sealed until the dead dig again,
+// which is a change kept for later on purpose. The walk the field keeps can
+// be read out cell by cell - trace_route - which the host paints on the
+// ground so the way in can be watched while it proves itself.
 #include <cstdint>
 #include <vector>
 
@@ -58,16 +61,22 @@ struct Config {
     static constexpr int kWaveGrowth = 8;
     static constexpr int kWaveMaxZombies = 100;
     // How the dead cross: a climb of at most kWalkClimb is jumped and a drop
-    // of at most kWalkDrop walked - the strict crossing the build veto asks
-    // with. The field the zombies actually walk prices more: a fall of at
-    // most kFall, for they fear no landing, and any climb, with every block
-    // over the jump costing kDigPenalty steps - the spade that eventually
-    // digs it takes about that long - so the easy way round is walked first
-    // and a wall is only dug through when it is thin. Cliffs taller than the
-    // map and rooms without headroom stay unreachable either way. z grows
-    // downward, so a climb is the negative side of the delta.
+    // of at most kWalkDrop walked. That is the field the zombies walk now -
+    // no spade in it: they take the stairs, the ramps and the notches, and a
+    // wall more than a jump stands. kFall and kDigPenalty are the prices of
+    // the dig that is turned off while the walk proves itself; the flood
+    // still knows how to charge them, and turning them back on is one flag.
+    // Cliffs taller than a fall and rooms without headroom stay unreachable.
+    // z grows downward, so a climb is the negative side of the delta.
     static constexpr int kWalkDrop = 5, kWalkClimb = 2;
     static constexpr int kFall = 63, kDigPenalty = 12;
+    // How many of the four corners a wave comes from: one while the route
+    // is watched, more when the walk has proved itself. The corners
+    // beyond it stay in the config but raise nothing.
+    int spawn_corners = 1;
+    int active_corners() const {
+        return spawn_corners < 1 ? 1 : (spawn_corners > 4 ? 4 : spawn_corners);
+    }
     // How far out from its asked-for centre a corner's spawn point may be
     // sought, in rings: the corners a real map names sit in border mountains
     // and sea, and only the field decides where a wave can walk in from.
@@ -129,6 +138,22 @@ public:
     // Whether a cell is within `cells` of the core, where the zombies bite.
     bool near_core(int x, int y, int cells) const;
 
+    // One treaded cell of a route: the cell and the ground of it. The
+    // ground is the top solid voxel of the column, z counting down.
+    struct RouteCell {
+        int x, y;
+    };
+    // The anchor the last wave walked in from at `corner`: the nearest
+    // cell of the walk to the corner's asked-for centre, kept from the
+    // wave's placing. False when the corner never found its footing (a
+    // corner with no anchor raises nothing).
+    bool corner_anchor(int corner, int& x, int& y) const;
+    // The way in from a cell, read off the walk: the cells one at a time,
+    // each a legal crossing downhill, until the core's doorstep. The route
+    // handed back is the pack's line of march - the host paints it so the
+    // way can be watched. False when the cell is not on the walk at all.
+    bool trace_route(int x, int y, std::vector<RouteCell>& out);
+
     // For tests: the field's distance from the core, or -1 unreachable.
     int distance(int x, int y) const;
 
@@ -154,6 +179,10 @@ private:
     std::vector<int16_t> ground_;
     bool field_dirty_ = false;
     double field_at_ = 0.0;
+    // Where the wave last walked in from, one anchor a corner (-1 for none):
+    // the route the host paints is traced from here.
+    int anchor_x_[4] = {-1, -1, -1, -1};
+    int anchor_y_[4] = {0};
 };
 
 }  // namespace horde

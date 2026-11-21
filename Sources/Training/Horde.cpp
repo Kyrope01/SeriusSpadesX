@@ -98,17 +98,18 @@ bool Horde::walkable(int x, int y) {
 // --- the field ---------------------------------------------------------------
 
 // A walk from the core over walkable cells: the distance of every cell the
-// walking dead could reach. With `dig` set it is the walk a spade-wielding
-// zombie can truly make: a fall of at most kFall, for it fears no landing,
-// and any climb, each block beyond the jump priced at kDigPenalty steps -
-// about the time its spade takes that block off - so the thin wall is dug
-// through and the long way round is walked instead. Without `dig` it is the
-// strict crossing the build veto asks with: kWalkClimb a jump, kWalkDrop a
-// fall, nothing dug. `block_x` and `block_y` name one column held out of the
-// walk, the veto's candidate; -1 for none. 4-neighbours: corners are where
-// zombies jam on pillars, not where they cross. The dig's edges are not all
-// one step wide, so the walk is a Dijkstra, not the breadth-first queue it
-// once was.
+// walking dead could reach. Without `dig` it is the crossing both the build
+// veto asks with and - for now - the zombies themselves walk: kWalkClimb a
+// jump, kWalkDrop a fall, nothing dug, so stairs and ramps are the way in
+// and a wall more than a jump stands until the dig is turned back on. With
+// `dig` set it is the richer walk a spade-wielding zombie could make: a fall
+// of at most kFall, for it fears no landing, and any climb, each block
+// beyond the jump priced at kDigPenalty steps - about the time its spade
+// takes that block off - kept for when the dead dig again. `block_x` and
+// `block_y` name one column held out of the walk, the veto's candidate; -1
+// for none. 4-neighbours: corners are where zombies jam on pillars, not
+// where they cross. The dig's edges are not all one step wide, so the walk
+// is a Dijkstra, not the breadth-first queue it once was.
 void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig) {
     dist.assign(static_cast<size_t>(kMapW) * kMapH, kUnreachable);
     const int cx = cfg_.core_x, cy = cfg_.core_y;
@@ -162,9 +163,11 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
     }
 }
 
-// Is any cell of any spawn corner's box on the field?
+// Is any cell of any active corner's box on the walk? The corners beyond
+// the active count raise nothing, and a way in nobody walks is not the
+// veto's to protect.
 bool Horde::reach_spawn(const std::vector<int32_t>& dist) const {
-    for (int k = 0; k < 4; ++k) {
+    for (int k = 0; k < cfg_.active_corners(); ++k) {
         const int sx = cfg_.spawn_x[k], sy = cfg_.spawn_y[k];
         const int n = cfg_.spawn_size;
         int found = 0;
@@ -184,7 +187,9 @@ bool Horde::reach_spawn(const std::vector<int32_t>& dist) const {
 
 void Horde::recompute() {
     ground_.assign(static_cast<size_t>(kMapW) * kMapH, -2);  // -2: not yet known
-    flood(dist_, -1, -1, true);
+    // The walk without the spade: what legs can cross, and stairs when they
+    // cannot. Turning the dig back on is the `true` in this call.
+    flood(dist_, -1, -1, false);
     field_dirty_ = false;
 }
 
@@ -206,12 +211,11 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
         const int nd = dist_[cell_index(nx, ny)];
         if (nd < 0) continue;
         if (here >= 0 && nd >= here) continue;  // downhill only
-        // The field prices the crossing: a fall the zombie fears no landing
-        // from, a climb of any height, for the dig pays what the jump cannot.
-        // It only steps toward where the field says the way in lies; the
-        // stuck-and-dig takes the walls from there.
+        // The field prices the crossing: without the dig it takes only what
+        // legs cross - a jump up, a fall down, a wall refused - so the
+        // neighbour handed back is always a step the walker can make.
         const int dz = ground(nx, ny) - g;
-        if (dz > Config::kFall) continue;
+        if (dz > Config::kWalkDrop || dz < -Config::kWalkClimb) continue;
         if (best < 0 || nd < best) {
             best = nd;
             bx = nx;
@@ -245,50 +249,102 @@ bool Horde::near_core(int x, int y, int cells) const {
     return std::abs(x - cfg_.core_x) <= cells && std::abs(y - cfg_.core_y) <= cells;
 }
 
+bool Horde::corner_anchor(int corner, int& x, int& y) const {
+    if (corner < 0 || corner >= 4) return false;
+    if (anchor_x_[corner] < 0) return false;
+    x = anchor_x_[corner];
+    y = anchor_y_[corner];
+    return true;
+}
+
+// The way in, one tread a cell: from wherever it starts the walk goes
+// downhill on the field, each lower cell a legal crossing (the flood only
+// ever joins cells a jump or a fall connects), until no lower cell is left -
+// the core itself when its column is not in the way, and the doorstep
+// beside it when it is, which is where the horde stops to bite. The field
+// is all unit prices, so a traced route is exactly the walk's distance
+// long, one cell of it a step; the cap is a guard against a broken field,
+// not a route that is expected.
+bool Horde::trace_route(int x, int y, std::vector<RouteCell>& out) {
+    out.clear();
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
+    if (dist_[cell_index(x, y)] < 0) return false;
+    static const int kDx[4] = {1, -1, 0, 0};
+    static const int kDy[4] = {0, 0, 1, -1};
+    const size_t guard = static_cast<size_t>(kMapW) * kMapH;
+    while (out.size() < guard) {
+        out.push_back(RouteCell{x, y});
+        const int here = dist_[cell_index(x, y)];
+        const int g = ground(x, y);
+        int best = -1, bx = -1, by = -1;
+        for (int k = 0; k < 4; ++k) {
+            const int nx = x + kDx[k], ny = y + kDy[k];
+            if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
+            const int nd = dist_[cell_index(nx, ny)];
+            if (nd < 0 || here < 0 || nd >= here) continue;  // downhill only
+            const int dz = ground(nx, ny) - g;
+            if (dz > Config::kWalkDrop || dz < -Config::kWalkClimb) continue;
+            if (best < 0 || nd < best) {
+                best = nd;
+                bx = nx;
+                by = ny;
+            }
+        }
+        if (bx < 0) break;  // the doorstep: no lower crossing from here
+        x = bx;
+        y = by;
+    }
+    return true;
+}
+
 // --- the veto ----------------------------------------------------------------
 
 // Two floods, one with the candidate column held out. The map is not touched
-// here: the candidate only hides that column from the walk. Both questions
-// and the field all come out of it freshly computed (the same work the
-// debounce would soon do), so a refused block answers the next veto with a
-// working field, and the zombies' field keeps the spade's prices instead of
-// the strict ones the veto just asked with.
+// here: the candidate only hides that column from the walk. The walk the
+// zombies use is the same one the veto asks with, so the second flood - the
+// map as it stands - is written straight into the field, kept fresh by the
+// very question the veto came to ask (the same work the debounce would soon
+// do).
 bool Horde::can_build(int x, int y, int z) {
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return true;
     if (z < 0 || z >= SolidMap::SIZE_Z) return true;
     std::vector<int32_t> with_block;
     flood(with_block, x, y, false);
-    std::vector<int32_t> without_block;
-    flood(without_block, -1, -1, false);
-    flood(dist_, -1, -1, true);  // the walk's answer, not the veto's
+    flood(dist_, -1, -1, false);  // the walk's answer, not the veto's
     field_dirty_ = false;
     if (reach_spawn(with_block)) return true;
     // Fail open: sealed before this block too - the tower stands or falls on
     // its own, refusing nothing that changes nothing.
-    if (!reach_spawn(without_block)) return true;
+    if (!reach_spawn(dist_)) return true;
     // This block would have sealed the last way in.
     return false;
 }
 
 // --- the waves ----------------------------------------------------------------
 
-// A wave walks in from wherever the field reaches. Each corner is asked for
-// its anchor: the nearest walkable cell already on the dig field, scanned
-// out ring by ring to kSpawnSearch. The corners a real map names sit in
-// border mountains and sea, and a zombie planted on a ledge the field
+// A wave walks in from wherever the walk reaches. Each active corner is
+// asked for its anchor: the nearest walkable cell already on the walk,
+// scanned out ring by ring to kSpawnSearch. The corners a real map names
+// sit in border mountains and sea, and a zombie planted on a ledge the walk
 // never touches walks the ledge forever: a corner with no anchor within
 // reach is skipped, and its share of the wave is simply not raised. Back
 // cells hold the same rule, for rows of dozens reach past cliffs onto
 // ground their corner's first cell cannot see; the nearest fielded cell of
-// each row is taken, and a strip with none crowds onto the anchor.
+// each row is taken, and a strip with none crowds onto the anchor. The
+// anchors are kept - the host traces the route it paints from them.
 void Horde::place_wave(double now) {
     if (field_dirty_) recompute();
     const int n = cfg_.wave_zombies(wave_);
+    const int nc = cfg_.active_corners();
     auto stands = [&](int x, int y) {
         return walkable(x, y) && dist_[cell_index(x, y)] >= 0;
     };
     int ax[4] = {-1, -1, -1, -1}, ay[4] = {0, 0, 0, 0}, ag[4] = {0, 0, 0, 0};
     for (int c = 0; c < 4; ++c) {
+        anchor_x_[c] = -1;
+        anchor_y_[c] = 0;
+    }
+    for (int c = 0; c < nc; ++c) {
         const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
         for (int r = 0; r < Config::kSpawnSearch && ax[c] < 0; ++r)
             for (int dy = -r; dy <= r && ax[c] < 0; ++dy)
@@ -300,10 +356,12 @@ void Horde::place_wave(double now) {
                     ay[c] = y;
                     ag[c] = ground(x, y);
                 }
+        anchor_x_[c] = ax[c];
+        anchor_y_[c] = ay[c];
     }
     pending_.clear();
     for (int i = 0; i < n; ++i) {
-        const int corner = i % 4;
+        const int corner = i % nc;
         const int px = ax[corner], py = ay[corner];
         if (px < 0) continue;  // a corner the field never reaches: skip it
         // Zombies stagger out a few cells apart so they do not march in one

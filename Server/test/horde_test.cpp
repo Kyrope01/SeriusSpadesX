@@ -6,12 +6,15 @@
 // The map is a plain: ground with its top at z = 32. One solid voxel is no
 // ground at all, so the ground plane is a slab, z = 32 and z = 33 solid in
 // every column. A wall is the same three voxels higher, its top at z = 29.
-// Two crossings are asked of it: the strict one the build veto works with -
-// a climb of two is a jump, a run of three is not stepped onto - and the
-// field the zombies actually walk, which pays the spade's price for every
-// block beyond the jump and digs on through.
+// One crossing is asked of it: the walk of the legs - a climb of two is a
+// jump and a drop of five a fall, anything more a wall, for the dead walk
+// and do not dig. The veto asks the same walk the other way round, with the
+// block a player wants held out of it, and the route the host paints is
+// read off it cell by cell.
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #include "SolidMap.h"
@@ -123,18 +126,12 @@ void test_field() {
         rough.set_block(230, 230, 39, true);
         rough.set_block(230, 230, 38, true);
         horde::Horde hh(rough, horde_cfg(256, 256));
-        check(hh.distance(200, 200) >= 0, "a pile of two is jumped");
-        check(hh.distance(210, 210) >= 0, "a pile of three is dug through");
+        check(hh.distance(200, 200) >= 0, "a pile of two is jumped onto");
+        check(hh.distance(210, 210) < 0, "a pile of three is a wall: no dig, no way");
         check(hh.distance(220, 220) >= 0, "a pit four deep is walked into");
-        check(hh.distance(230, 230) >= 0, "a pit six deep is fallen into");
-        // The dig field charges for the crossing: on the plain the pile is
-        // no farther than its cell, but every block of climb beyond the
-        // jump adds the spade's steps to the way over it.
-        SolidMap flat;
-        plain(flat);
-        horde::Horde hf(flat, horde_cfg(256, 256));
-        check(hh.distance(210, 210) - hf.distance(210, 210) >= horde::Config::kDigPenalty,
-              "crossing a three-block pile pays the spade's steps");
+        check(hh.distance(230, 230) < 0, "a pit six deep is over the fall: no way in");
+        // The walk's edge is walked as well: from the shallow pit the field
+        // leads straight out again, downhill every step of it.
         int px = 0, py = 0;
         check(hh.next_step(220, 220, px, py) &&
                   hh.distance(px, py) < hh.distance(220, 220),
@@ -142,8 +139,9 @@ void test_field() {
     }
 
     // The core's column, three blocks standing on it: its top is a walkable
-    // cell nothing steps onto, but the field has to spread from the cells
-    // beside it - that is where the horde stops to bite.
+    // cell nothing steps onto - no jump reaches it now - but the field has
+    // to spread from the cells beside it - that is where the horde stops to
+    // bite.
     {
         SolidMap marked;
         plain(marked);
@@ -180,21 +178,21 @@ void test_veto() {
         check(!h.can_build(106, 100, 0) && !h.can_build(106, 100, 63),
               "the veto asks the same question at every height");
     }
-    // The ring shut for real: whatever is asked now, the map was sealed
-    // before the block, and the veto fails open.
+    // The ring shut for real: no climb, no dig, the walk is sealed out of
+    // the core, and the map was sealed before the block, so the veto fails
+    // open and the fallback walks a straight line.
     {
         SolidMap map;
         plain(map);
         ring(map, Ring{100, 100, 6, -1, -1});
         horde::Horde h(map, horde_cfg(100, 100));
         h.on_map_edited();
-        h.tick(2.0);  // past the debounce: the recomputed field prices the wall
-        check(h.distance(130, 100) >= 0, "with a spade, the shut ring is still crossed");
+        h.tick(2.0);  // past the debounce: the recomputed field is shut out
+        check(h.distance(130, 100) < 0, "the shut ring walls the core off");
         check(h.can_build(130, 100, 31), "with the core already sealed, the veto fails open");
         int tx = 0, ty = 0;
-        check(h.next_step(140, 100, tx, ty) &&
-                  h.distance(tx, ty) < h.distance(140, 100),
-              "off the strict field, a zombie still walks the dig");
+        check(h.next_step(140, 100, tx, ty) && (tx != 140 || ty != 100),
+              "off the shut field, the fallback still moves a leg");
     }
 }
 
@@ -215,10 +213,13 @@ void test_waves() {
     h.take_due(due, 100.0);
     check(h.zombies_up() == 12, "wave one is twelve zombies (base)");
     bool on_ground = true;
+    bool one_corner = true;
     for (const horde::SpawnAt& s : due) {
         if (s.z != GROUND_TOP) on_ground = false;  // due holds the last eleven
+        if (s.corner != 0) one_corner = false;
     }
     check(on_ground, "spawn cells stand on the ground they were picked for");
+    check(one_corner, "one corner open: every zombie walks out of corner zero");
     check(!h.wave_cleared(), "twelve walking is not a cleared wave");
     h.on_core_damaged(50);
     check(h.phase() == horde::Phase::Wave && h.core_hp() == 100, "the core takes a hit");
@@ -251,12 +252,99 @@ void test_growth() {
     check(cfg.wave_zombies(20) == 100, "far out: capped");
 }
 
+void test_route() {
+    std::printf("[route] the way in, painted cell by cell\n");
+    // The plain: from corner zero's anchor the route runs downhill to the
+    // core, one cell a step, and is exactly the walk's distance long.
+    {
+        SolidMap map;
+        plain(map);
+        horde::Horde h(map, horde_cfg(256, 256));
+        h.restart(0.0);
+        h.tick(10.5);  // prep over: the wave is placed, its anchor kept
+        int ax = -1, ay = -1;
+        check(h.corner_anchor(0, ax, ay), "corner zero keeps its anchor");
+        check(h.distance(ax, ay) >= 0, "the anchor stands on the field");
+        std::vector<horde::RouteCell> cells;
+        check(h.trace_route(ax, ay, cells), "the route traces from the anchor");
+        check(!cells.empty() && cells.front().x == ax && cells.front().y == ay,
+              "the route starts on the anchor");
+        check(static_cast<int>(cells.size()) == h.distance(ax, ay) + 1,
+              "the route is exactly the walk's distance long");
+        bool steps_ok = true;
+        for (size_t i = 1; i < cells.size(); ++i) {
+            const int dx = cells[i].x - cells[i - 1].x;
+            const int dy = cells[i].y - cells[i - 1].y;
+            if (std::abs(dx) + std::abs(dy) != 1) steps_ok = false;
+            if (h.distance(cells[i].x, cells[i].y) !=
+                h.distance(cells[i - 1].x, cells[i - 1].y) - 1)
+                steps_ok = false;
+        }
+        check(steps_ok, "every step of the route is one downhill cell");
+        check(h.distance(cells.back().x, cells.back().y) == 0,
+              "the route ends at the core");
+        check(!h.trace_route(-1, 0, cells), "off the map, no route traces");
+    }
+    // A ring with one gap around the core: the only way in passes the gap,
+    // and the traced route goes through it.
+    {
+        SolidMap map;
+        plain(map);
+        ring(map, Ring{256, 256, 10, 266, 256});
+        horde::Horde h(map, horde_cfg(256, 256));
+        h.restart(0.0);
+        h.tick(10.5);
+        int ax = -1, ay = -1;
+        check(h.corner_anchor(0, ax, ay), "the gap ring still leaves an anchor");
+        std::vector<horde::RouteCell> cells;
+        check(h.trace_route(ax, ay, cells), "the route traces to the ringed core");
+        bool passes_gap = false;
+        for (const horde::RouteCell& c : cells)
+            if (c.x == 266 && c.y == 256) passes_gap = true;
+        check(passes_gap, "the route enters through the gap");
+    }
+    // Two walls the walk cannot cross: a cell shut off the field traces
+    // nothing, and a core sealed away still anchors its corner - wherever
+    // the field still stands, in the ring's inside or out on the plain.
+    {
+        SolidMap map;
+        plain(map);
+        ring(map, Ring{100, 100, 6, -1, -1});  // the core sealed in
+        horde::Horde h(map, horde_cfg(100, 100));
+        std::vector<horde::RouteCell> cells;
+        check(!h.trace_route(130, 100, cells), "a cell off the field traces nothing");
+        h.restart(0.0);
+        h.tick(10.5);
+        int ax = 0, ay = 0;
+        check(h.corner_anchor(0, ax, ay), "a sealed core still anchors its corner");
+        check(std::max(std::abs(ax - 100), std::abs(ay - 100)) <= 5,
+              "the anchor stands where the field still does: inside the ring");
+    }
+    {
+        SolidMap map;
+        plain(map);
+        // A wall 200 cells out around corner zero: the search never sees a
+        // cell of the field, so the corner stays unanchored.
+        ring(map, Ring{32, 32, 200, -1, -1});
+        horde::Horde h(map, horde_cfg(256, 256));
+        h.restart(0.0);
+        h.tick(10.5);
+        int ax = 0, ay = 0;
+        check(!h.corner_anchor(0, ax, ay), "a corner the field never reaches holds no anchor");
+        std::vector<horde::SpawnAt> due;
+        check(!h.take_due(due, 100.0), "nothing spawns off an unanchored corner");
+        check(h.zombies_up() == 0, "no zombies stood up");
+        check(h.wave_cleared(), "a wave that never stood is cleared");
+    }
+}
+
 }  // namespace
 
 int main() {
     test_field();
     test_veto();
     test_waves();
+    test_route();
     test_growth();
     if (g_failures == 0) {
         std::printf("horde: all checks passed\n");

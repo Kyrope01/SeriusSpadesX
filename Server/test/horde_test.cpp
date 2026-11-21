@@ -6,7 +6,11 @@
 // The map is a plain: ground with its top at z = 32. One solid voxel is no
 // ground at all, so the ground plane is a slab, z = 32 and z = 33 solid in
 // every column. A wall is the same three voxels higher, its top at z = 29.
-// One crossing is asked of it: the walk of the legs - a climb of two is a
+// An arch is a wall breached by a tunnel, its lintel high enough to leave
+// the plain's floor below: two standing surfaces in one column, the road
+// over the cap and the road through the tunnel, and the walk takes
+// whichever the legs can. One crossing is asked of it: the walk of the
+// legs - a climb of two is a
 // jump, and every fall is taken whole, for the dead take no falling damage;
 // anything more than a jump up is a wall, for they do not dig. The veto
 // asks the same walk the other way round, with the block a player wants
@@ -313,6 +317,56 @@ void test_route() {
         for (const horde::RouteCell& c : cells)
             if (c.x == 266 && c.y == 256) passes_gap = true;
         check(passes_gap, "the route enters through the gap");
+    }
+    // The arch: walls the walk cannot climb, pierced by a tunnel whose
+    // lintel leaves the plain's floor below it - the wall's cap is one
+    // standing surface, the tunnel's floor another, and the way in runs
+    // under it. The treads of the route through the gate carry the
+    // tunnel's floor height, never the wall's cap, so the paint lands
+    // where the feet go; and one block of a tunnel wide enough changes
+    // nothing.
+    {
+        SolidMap map;
+        plain(map);
+        for (int y = 250; y <= 262; ++y)
+            for (int x = 250; x <= 262; ++x) {
+                const bool frame = (x == 250 || x == 262 || y == 250 || y == 262);
+                if (!frame) continue;
+                const bool gate = (x == 262 && y >= 254 && y <= 258);
+                if (!gate) {
+                    // Walls three high on the plain: a climb the legs refuse.
+                    map.set_block(x, y, WALL_TOP, true);
+                    map.set_block(x, y, WALL_TOP + 1, true);
+                    map.set_block(x, y, WALL_TOP + 2, true);
+                } else {
+                    // The gate: a lintel above the plain - two open voxels
+                    // under it, the road through.
+                    map.set_block(x, y, WALL_TOP - 1, true);
+                    map.set_block(x, y, WALL_TOP, true);
+                }
+            }
+        horde::Horde h(map, horde_cfg(256, 256));
+        check(h.distance(270, 256) >= 0, "the tunnel is a way in the field takes");
+        check(h.distance(260, 256) >= 0, "the field stands inside the walls too");
+        check(h.can_build(262, 256, 31),
+              "one column of a five wide gate closes nothing");
+        h.restart(0.0);
+        h.tick(10.5);
+        // Every corner walks in through the one gate: the south east's
+        // route crosses it on its way to the core.
+        int ax = -1, ay = -1;
+        check(h.corner_anchor(3, ax, ay), "corner three anchors outside the walls");
+        check(ax > 262 && ay > 262, "the anchor stands beyond the gate, not inside");
+        std::vector<horde::RouteCell> cells;
+        check(h.trace_route(ax, ay, cells), "the route traces under the arch");
+        bool through = false, on_floor = true;
+        for (const horde::RouteCell& c : cells)
+            if (c.x == 262 && c.y >= 254 && c.y <= 258) {
+                through = true;
+                if (c.z != GROUND_TOP) on_floor = false;
+            }
+        check(through && on_floor, "the wave enters by the tunnel, walking its floor");
+        check(h.placed() == 12, "the wave stands up outside the walls");
     }
     // Two walls the walk cannot cross: a cell shut off the field traces
     // nothing, and a core sealed away still anchors its corner - wherever

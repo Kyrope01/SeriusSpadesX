@@ -6,10 +6,13 @@
 // veto. Physics, players and packets stay in Server.cpp, which steers the
 // zombies it owns by asking this where to step.
 //
-// The field is one walk from the core over walkable cells (its ground level
-// and the headroom above), recomputed a short debounce after every edit; a
-// zombie steps to the neighbour whose distance is lowest, which is a cheapest
-// path around whatever has been built since. For now the dead walk and do not
+// The field is one walk from the core over the map's standing surfaces, the
+// top of every solid run that leaves headroom above it, recomputed a short
+// debounce after every edit; a zombie steps to the neighbouring surface whose
+// distance is lowest, which is a cheapest path around whatever has been
+// built since - a wall's top is one surface, and the floor of a tunnel
+// through it is another, so the walk goes under as well as over, and no
+// gate an arch leaves standing closes a town. For now the dead walk, and do not
 // dig: the walk prices only what legs can cross, and the legs fear no
 // landing - a climb of kWalkClimb is a jump, and every fall is taken whole,
 // for the host leaves its dead their falling damage, so no drop is a wall
@@ -23,8 +26,9 @@
 // out of date), the veto fails open and the tower stands or falls as the
 // player builds it; a sealed world stays sealed until the dead dig again,
 // which is a change kept for later on purpose. The walk the field keeps can
-// be read out cell by cell - trace_route - which the host paints on the
-// ground so the way in can be watched while it proves itself.
+// be read out cell by cell - trace_route, each cell with the surface it was
+// walked on - which the host paints at the walk's own height, never on the
+// treetops above it, so the way in can be watched while it proves itself.
 #include <cstdint>
 #include <vector>
 
@@ -104,9 +108,11 @@ struct SpawnAt {
 };
 
 // One treaded cell of a route: the cell on the map the line of march is
-// painted on. The host builds its route one of these at a time.
+// painted on, and the surface of it the walk truly runs on. The host builds
+// its route one of these at a time, and paints at that height - never on
+// the top of whatever column happens to stand over the road.
 struct RouteCell {
-    int x, y;
+    int x, y, z;
 };
 
 class Horde {
@@ -175,18 +181,32 @@ public:
     // nothing).
     bool corner_anchor(int corner, int& x, int& y) const;
     // The way in from a cell, read off the walk: the cells one at a time,
-    // each a legal crossing downhill, until the core's doorstep. The route
-    // handed back is the pack's line of march - the host paints it so the
-    // way can be watched. False when the cell is not on the walk at all.
+    // each a legal crossing downhill, until the core's doorstep, each with
+    // the surface the walk runs on it at. The route handed back is the
+    // pack's line of march - the host paints it so the way can be watched.
+    // False when the cell is not on the walk at all.
     bool trace_route(int x, int y, std::vector<RouteCell>& out);
 
     // For tests: the field's distance from the core, or -1 unreachable.
     int distance(int x, int y) const;
 
 private:
+    // The most standing surfaces one column may carry: a wall's top and the
+    // floor of the tunnel through it are two; anything stacking deeper than
+    // this is not stood on today.
+    static constexpr int kSurfMax = 4;
+
     void recompute();
-    bool walkable(int x, int y);
     int ground(int x, int y);
+    // One cell's standing surfaces: every solid run top with the two voxels
+    // above it open. fill_surfaces scans the column once; the rest read the
+    // cache. surface() gives the k-th surface's z, surf_count how many the
+    // column carries; best_state gives the surface with the lowest field
+    // distance (or -1 when the cell is off the walk).
+    void fill_surfaces(int x, int y);
+    int surf_count(int x, int y);
+    int surface(int x, int y, int k);
+    int best_state(int x, int y) const;
     bool reach_spawn(const std::vector<int32_t>& dist) const;
     void flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig);
     void begin_wave(double now);
@@ -200,9 +220,12 @@ private:
     int core_hp_;
     double phase_until_ = 0.0;
     std::vector<SpawnAt> pending_;
-    // The field: a distance per cell, and the ground level it was figured on.
+    // The field: a distance per standing surface (kSurfMax of them a cell),
+    // and the z of every surface the columns carry, scanned once a recompute
+    // (surf_n_ of -1: this column is not scanned yet).
     std::vector<int32_t> dist_;
-    std::vector<int16_t> ground_;
+    std::vector<int16_t> surf_z_;
+    std::vector<int8_t> surf_n_;
     bool field_dirty_ = false;
     double field_at_ = 0.0;
     // Where the wave last walked in from, one anchor a corner (-1 for none):

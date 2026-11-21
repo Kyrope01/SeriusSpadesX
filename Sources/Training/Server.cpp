@@ -1260,7 +1260,10 @@ struct Server::Impl {
         const uint32_t argb = 0x7F000000u | kOrange;
         bool told_color = false;
         for (const horde::RouteCell& c : cells) {
-            const int z = map.get_z(c.x, c.y);
+            // The surface the walk truly ran on, not the top of the
+            // column: a route under an arch paints its tunnel's floor,
+            // never the wall's cap above it.
+            const int z = c.z;
             if (z < 1 || z >= 62) continue;      // the bed the whole map stands on
             if (core_column_cell(c.x, c.y, z)) continue;   // the core holds
             if (map.color(c.x, c.y, z) == argb) continue;   // already on the line

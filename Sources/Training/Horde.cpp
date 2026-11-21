@@ -27,33 +27,6 @@ size_t cell_index(int x, int y) {
     return static_cast<size_t>(y) * kMapW + x;
 }
 
-// Bits above the ground: a walker is just under two cells tall, so the two
-// voxels above the ground must be open. z counts down: the ground is the
-// topmost solid voxel, the sky above it the lower z. SolidMap's columns are
-// 64-bit words, bit z set where solid.
-int ground_of(uint64_t col) {
-    if (col == 0) return -1;  // a column of nothing: no ground to stand on
-    // The topmost solid z: the least significant set bit.
-#if !defined(_MSC_VER)
-    return static_cast<int>(__builtin_ctzll(col));
-#elif defined(_M_X64) || defined(_M_ARM64) || defined(_M_ARM64EC)
-    unsigned long z = 0;
-    _BitScanForward64(&z, col);
-    return static_cast<int>(z);
-#else
-    // 32-bit MSVC has no 64-bit scan intrinsic: scan the low half,
-    // and only when it is empty the high half.
-    unsigned long z = 0;
-    if ((col & 0xffffffffu) != 0)
-        _BitScanForward(&z, static_cast<unsigned long>(col));
-    else {
-        _BitScanForward(&z, static_cast<unsigned long>(col >> 32));
-        z += 32;
-    }
-    return static_cast<int>(z);
-#endif
-}
-
 }  // namespace
 
 int Config::wave_zombies(int wave) const {
@@ -71,56 +44,110 @@ Horde::Horde(const SolidMap& map, const Config& cfg) : map_(map), cfg_(cfg) {
 
 int Horde::distance(int x, int y) const {
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return kUnreachable;
-    return dist_[cell_index(x, y)];
+    // The cell's best-reached surface, whatever floor it stands on.
+    int best = kUnreachable;
+    const int32_t* d = &dist_[cell_index(x, y) * kSurfMax];
+    for (int k = 0; k < kSurfMax; ++k)
+        if (d[k] != kUnreachable && (best == kUnreachable || d[k] < best))
+            best = d[k];
+    return best;
 }
 
-// --- the ground and the walkable cells --------------------------------------
+// --- the standing surfaces ---------------------------------------------------
 
-// Cached on the flood of the field, filled lazily elsewhere: ground levels
-// only change when the map does, which flags the field dirty and re-floods
-// soon after; a level asked for between an edit and the refresh serves a
-// step a tick early, nothing worse.
-int Horde::ground(int x, int y) {
-    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return -1;
-    if (ground_[cell_index(x, y)] != -2) return ground_[cell_index(x, y)];
-    const int g = ground_of(map_.column(x, y));
-    ground_[cell_index(x, y)] = static_cast<int16_t>(g);
-    return g;
-}
-
-bool Horde::walkable(int x, int y) {
-    const int g = ground(x, y);
-    if (g < 2) return false;  // no ground, or no headroom above it
+// A column is not one floor. Every solid run top with two open voxels above
+// it is a surface the dead can stand on - the outside of a wall top is one,
+// and so is the floor of a tunnel through it - and the field fills them all,
+// so the walk goes under as well as over, and no gate an arch leaves open
+// closes a town. The surfaces are scanned once a recompute and cached; a
+// column asked for between an edit and the refresh serves a step a tick
+// early, nothing worse.
+void Horde::fill_surfaces(int x, int y) {
+    const size_t i = cell_index(x, y);
     const uint64_t col = map_.column(x, y);
-    return ((col >> (g - 2)) & 3u) == 0;  // the two voxels above the ground
+    int n = 0;
+    int prev_solid = 0;
+    for (int z = 0; z < SolidMap::SIZE_Z; ++z) {
+        const int solid = static_cast<int>((col >> z) & 1u);
+        if (solid && !prev_solid) {
+            // A solid run opens at z: its top voxel, standable only with
+            // two open voxels above it. z counts down, so the sky sits at
+            // the lower z and the pair above the surface is z-2 and z-1.
+            if (z >= 2 && ((col >> (z - 2)) & 3u) == 0) {
+                surf_z_[i * kSurfMax + n] = static_cast<int16_t>(z);
+                if (++n == kSurfMax) break;
+            }
+        }
+        prev_solid = solid;
+    }
+    surf_n_[i] = static_cast<int8_t>(n);
+}
+
+int Horde::surf_count(int x, int y) {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return 0;
+    const size_t i = cell_index(x, y);
+    if (surf_n_[i] < 0) fill_surfaces(x, y);
+    return surf_n_[i];
+}
+
+int Horde::surface(int x, int y, int k) {
+    if (k < 0 || k >= surf_count(x, y)) return -1;
+    return surf_z_[cell_index(x, y) * kSurfMax + k];
+}
+
+// The surface the field reaches best: the walk's own floor of the cell,
+// what a zombie there stands on and the paint truly runs at. Ties keep
+// the lowest slot; -1 when no surface of the cell is on the walk.
+int Horde::best_state(int x, int y) const {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return -1;
+    int best = kUnreachable, bk = -1;
+    const int32_t* d = &dist_[cell_index(x, y) * kSurfMax];
+    for (int k = 0; k < kSurfMax; ++k)
+        if (d[k] != kUnreachable && (best == kUnreachable || d[k] < best)) {
+            best = d[k];
+            bk = k;
+        }
+    return bk;
+}
+
+// The column's first surface, its topmost floor: the level the anchors
+// filter their rings on.
+int Horde::ground(int x, int y) {
+    return surface(x, y, 0);
 }
 
 // --- the field ---------------------------------------------------------------
 
-// A walk from the core over walkable cells: the distance of every cell the
-// walking dead could reach. Without `dig` it is the crossing both the build
-// veto asks with and the zombies themselves walk: kWalkClimb a jump, and
-// every fall taken whole - the host leaves its dead their falling damage,
-// so no drop is a wall to them - nothing dug, so stairs, ramps and notches
-// are the way up, cliffs and pits are doors down, and only a climb more
-// than a jump stands in the way. With `dig` set it is the richer walk a
-// spade-wielding zombie could make: the same falls, and any climb, each
-// block beyond the jump priced at kDigPenalty steps - about the time its
-// spade takes that block off - kept for the day the dead dig again (the
-// canopy of a forest is one such day's work). `block_x` and
-// `block_y` name one column held out of the walk, the veto's candidate; -1
-// for none. 4-neighbours: corners are where zombies jam on pillars, not
-// where they cross. The dig's edges are not all one step wide, so the walk
-// is a Dijkstra, not the breadth-first queue it once was.
+// A walk from the core over the map's standing surfaces: the distance of
+// every floor the walking dead could reach, the floor of a tunnel under
+// its arch as much as the arch's top. Without `dig` it is the crossing
+// both the build veto asks with and the zombies themselves walk:
+// kWalkClimb a jump, and every fall taken whole - the host leaves its
+// dead their falling damage, so no drop is a wall to them - nothing dug,
+// so stairs, ramps and notches are the way up, cliffs and pits are doors
+// down, and only a climb more than a jump stands in the way. With `dig`
+// set it is the richer walk a spade-wielding zombie could make: the same
+// falls, and any climb, each block beyond the jump priced at kDigPenalty
+// steps - about the time its spade takes that block off - kept for the
+// day the dead dig again (the canopy of a forest is one such day's work).
+// `block_x` and `block_y` name one column held out of the walk, the
+// veto's candidate; -1 for none. 4-neighbours: corners are where zombies
+// jam on pillars, not where they cross. The edges are not all one step
+// wide, so the walk is a Dijkstra, not the breadth-first queue it once
+// was. Every surface of a cell is a state of its own: which floor a
+// walker stands on is decided where it crosses, not where it starts.
 void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig) {
-    dist.assign(static_cast<size_t>(kMapW) * kMapH, kUnreachable);
+    dist.assign(static_cast<size_t>(kMapW) * kMapH * kSurfMax, kUnreachable);
     const int cx = cfg_.core_x, cy = cfg_.core_y;
     if (cx < 0 || cx >= kMapW || cy < 0 || cy >= kMapH) return;
     if (block_x == cx && block_y == cy) return;
     static const int kDx[4] = {1, -1, 0, 0};
     static const int kDy[4] = {0, 0, 1, -1};
-    using QE = std::pair<int32_t, int32_t>;  // (steps so far, y * 512 + x)
+    using QE = std::pair<int32_t, int32_t>;  // (steps so far, state id)
     std::priority_queue<QE, std::vector<QE>, std::greater<QE>> open;
+    const auto state = [&](int x, int y, int k) -> size_t {
+        return cell_index(x, y) * kSurfMax + k;
+    };
     // The core may carry a column, the marker the clients draw: its ground
     // sits steps above the plain, and no walk starts there. The cells beside
     // it are seeded alongside it, so the field still spreads from the
@@ -128,10 +155,13 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
     auto seed = [&](int x, int y, int d) {
         if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return;
         if (x == block_x && y == block_y) return;
-        if (dist[cell_index(x, y)] != kUnreachable) return;
-        if (!walkable(x, y)) return;
-        dist[cell_index(x, y)] = d;
-        open.emplace(d, (y << 9) | x);  // x < 512 fits beside y in an int
+        for (int k = 0; k < surf_count(x, y); ++k) {
+            const size_t s = state(x, y, k);
+            if (dist[s] == kUnreachable) {
+                dist[s] = d;
+                open.emplace(d, static_cast<int32_t>(s));
+            }
+        }
     };
     seed(cx, cy, 0);
     for (int k = 0; k < 4; ++k) seed(cx + kDx[k], cy + kDy[k], 1);
@@ -139,28 +169,38 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
         const QE top = open.top();
         open.pop();
         const int d = top.first;
-        const int x = top.second & 511, y = top.second >> 9;
-        if (d != dist[cell_index(x, y)]) continue;  // a cheaper way came later
-        const int g = ground(x, y);
-        for (int k = 0; k < 4; ++k) {
-            const int nx = x + kDx[k], ny = y + kDy[k];
+        const size_t s = static_cast<size_t>(top.second);
+        if (d != dist[s]) continue;  // a cheaper way came later
+        const size_t i = s / kSurfMax;
+        const int k = static_cast<int>(s % kSurfMax);
+        const int x = static_cast<int>(i) % kMapW;
+        const int y = static_cast<int>(i) / kMapW;
+        const int z = surf_z_[i * kSurfMax + k];
+        for (int q = 0; q < 4; ++q) {
+            const int nx = x + kDx[q], ny = y + kDy[q];
             if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
             if (nx == block_x && ny == block_y) continue;
-            if (!walkable(nx, ny)) continue;
-            // z grows downward: dz is a drop and -dz a climb.
-            const int dz = ground(nx, ny) - g;
-            int nd = d + 1;
-            if (dig) {
-                if (dz > Config::kFall) continue;
-                if (dz < -Config::kWalkClimb)
-                    nd += Config::kDigPenalty * (-dz - Config::kWalkClimb);
-            } else {
-                if (dz > Config::kFall || dz < -Config::kWalkClimb) continue;
-            }
             const size_t ni = cell_index(nx, ny);
-            if (dist[ni] != kUnreachable && dist[ni] <= nd) continue;
-            dist[ni] = nd;
-            open.emplace(nd, (ny << 9) | nx);
+            const int n = surf_count(nx, ny);
+            for (int m = 0; m < n; ++m) {
+                // z grows downward: dz is a drop and -dz a climb. Each of
+                // the neighbour's surfaces is a crossing of its own - the
+                // road under the arch and the road over its top are one
+                // move apart only in a bird's flight, never in the legs'.
+                const int dz = surf_z_[ni * kSurfMax + m] - z;
+                int nd = d + 1;
+                if (dig) {
+                    if (dz > Config::kFall) continue;
+                    if (dz < -Config::kWalkClimb)
+                        nd += Config::kDigPenalty * (-dz - Config::kWalkClimb);
+                } else {
+                    if (dz > Config::kFall || dz < -Config::kWalkClimb) continue;
+                }
+                const size_t ns = state(nx, ny, m);
+                if (dist[ns] != kUnreachable && dist[ns] <= nd) continue;
+                dist[ns] = nd;
+                open.emplace(nd, static_cast<int32_t>(ns));
+            }
         }
     }
 }
@@ -175,7 +215,10 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
 bool Horde::reach_spawn(const std::vector<int32_t>& dist) const {
     const auto on_walk = [&](int x, int y) {
         if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
-        return dist[cell_index(x, y)] != kUnreachable;
+        const int32_t* d = &dist[cell_index(x, y) * kSurfMax];
+        for (int k = 0; k < kSurfMax; ++k)
+            if (d[k] != kUnreachable) return true;
+        return false;
     };
     for (int c = 0; c < 4; ++c) {
         const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
@@ -194,7 +237,9 @@ bool Horde::reach_spawn(const std::vector<int32_t>& dist) const {
 }
 
 void Horde::recompute() {
-    ground_.assign(static_cast<size_t>(kMapW) * kMapH, -2);  // -2: not yet known
+    const size_t cells = static_cast<size_t>(kMapW) * kMapH;
+    surf_z_.assign(cells * kSurfMax, -1);
+    surf_n_.assign(cells, -1);  // -1: not yet scanned
     // The walk without the spade: what legs can cross, and stairs when they
     // cannot. Turning the dig back on is the `true` in this call.
     flood(dist_, -1, -1, false);
@@ -207,28 +252,34 @@ void Horde::on_map_edited() { field_dirty_ = true; }
 
 bool Horde::next_step(int x, int y, int& tx, int& ty) {
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
-    if (!walkable(x, y)) return false;
-    const int here = dist_[cell_index(x, y)];
-    const int g = ground(x, y);
+    if (surf_count(x, y) <= 0) return false;  // nowhere to stand
+    const int bk = best_state(x, y);
+    const int here =
+        bk < 0 ? kUnreachable : dist_[cell_index(x, y) * kSurfMax + bk];
+    const int z = surface(x, y, bk < 0 ? 0 : bk);
     static const int kDx[4] = {1, -1, 0, 0};
     static const int kDy[4] = {0, 0, 1, -1};
     int best = -1, bx = -1, by = -1;
     for (int k = 0; k < 4; ++k) {
         const int nx = x + kDx[k], ny = y + kDy[k];
         if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
-        const int nd = dist_[cell_index(nx, ny)];
-        if (nd < 0) continue;
-        if (here >= 0 && nd >= here) continue;  // downhill only
-        // The field prices the crossing: without the dig it takes only what
-        // legs cross - a jump up, any fall down, a climb more than a jump
-        // refused - so the neighbour handed back is always a step the
-        // walker can make.
-        const int dz = ground(nx, ny) - g;
-        if (dz > Config::kFall || dz < -Config::kWalkClimb) continue;
-        if (best < 0 || nd < best) {
-            best = nd;
-            bx = nx;
-            by = ny;
+        const int base = cell_index(nx, ny) * kSurfMax;
+        for (int m = 0; m < surf_count(nx, ny); ++m) {
+            const int nd = dist_[base + m];
+            if (nd < 0) continue;
+            if (here >= 0 && nd >= here) continue;  // downhill only
+            // The field prices the crossing: without the dig it takes only
+            // what legs cross - a jump up, any fall down, a climb more than
+            // a jump refused - so the neighbour handed back is always a
+            // step the walker can make, and the surface handed down with
+            // it is one the legs truly reach.
+            const int dz = surface(nx, ny, m) - z;
+            if (dz > Config::kFall || dz < -Config::kWalkClimb) continue;
+            if (best < 0 || nd < best) {
+                best = nd;
+                bx = nx;
+                by = ny;
+            }
         }
     }
     // At the core's own cell, no step helps; that is the zombie's business.
@@ -240,9 +291,17 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
         if (x == cx && y == cy) return false;
         const int sx = std::abs(cx - x) >= std::abs(cy - y) ? (cx > x ? 1 : -1) : 0;
         const int sy = sx == 0 ? (cy > y ? 1 : -1) : 0;
-        if (sx != 0 && walkable(x + sx, y)) { tx = x + sx; ty = y; return true; }
-        if (sy != 0 && walkable(x, y + sy)) { tx = x; ty = y + sy; return true; }
-        if (sx != 0 && walkable(x, y + (cy > y ? 1 : -1))) {
+        if (sx != 0 && surf_count(x + sx, y) > 0) {
+            tx = x + sx;
+            ty = y;
+            return true;
+        }
+        if (sy != 0 && surf_count(x, y + sy) > 0) {
+            tx = x;
+            ty = y + sy;
+            return true;
+        }
+        if (sx != 0 && surf_count(x, y + (cy > y ? 1 : -1)) > 0) {
             tx = x;
             ty = y + (cy > y ? 1 : -1);
             return true;
@@ -267,41 +326,50 @@ bool Horde::corner_anchor(int corner, int& x, int& y) const {
 }
 
 // The way in, one tread a cell: from wherever it starts the walk goes
-// downhill on the field, each lower cell a legal crossing (the flood only
-// ever joins cells a jump or a fall connects), until no lower cell is left -
-// the core itself when its column is not in the way, and the doorstep
-// beside it when it is, which is where the horde stops to bite. The field
-// is all unit prices, so a traced route is exactly the walk's distance
-// long, one cell of it a step; the cap is a guard against a broken field,
-// not a route that is expected.
+// downhill on the field, each lower surface a legal crossing (the flood
+// only ever joins surfaces a jump or a fall connect), until no lower
+// surface is left - the core itself when its column is not in the way,
+// and the doorstep beside it when it is, which is where the horde stops
+// to bite. Each tread carries the surface it was walked on at, for the
+// host paints the line of march at the walk's own height, never on the
+// top of whatever column happens to stand over the road. The field is
+// all unit prices, so a traced route is exactly the walk's distance
+// long, one cell of it a step; the cap is a guard against a broken
+// field, not a route that is expected.
 bool Horde::trace_route(int x, int y, std::vector<RouteCell>& out) {
     out.clear();
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
-    if (dist_[cell_index(x, y)] < 0) return false;
+    int k = best_state(x, y);
+    if (k < 0) return false;
     static const int kDx[4] = {1, -1, 0, 0};
     static const int kDy[4] = {0, 0, 1, -1};
     const size_t guard = static_cast<size_t>(kMapW) * kMapH;
     while (out.size() < guard) {
-        out.push_back(RouteCell{x, y});
-        const int here = dist_[cell_index(x, y)];
-        const int g = ground(x, y);
-        int best = -1, bx = -1, by = -1;
-        for (int k = 0; k < 4; ++k) {
-            const int nx = x + kDx[k], ny = y + kDy[k];
+        const int z = surface(x, y, k);
+        out.push_back(RouteCell{x, y, z});
+        const int here = dist_[cell_index(x, y) * kSurfMax + k];
+        int best = -1, bx = -1, by = -1, bk = -1;
+        for (int q = 0; q < 4; ++q) {
+            const int nx = x + kDx[q], ny = y + kDy[q];
             if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
-            const int nd = dist_[cell_index(nx, ny)];
-            if (nd < 0 || here < 0 || nd >= here) continue;  // downhill only
-            const int dz = ground(nx, ny) - g;
-            if (dz > Config::kFall || dz < -Config::kWalkClimb) continue;
-            if (best < 0 || nd < best) {
-                best = nd;
-                bx = nx;
-                by = ny;
+            const int base = cell_index(nx, ny) * kSurfMax;
+            for (int m = 0; m < surf_count(nx, ny); ++m) {
+                const int nd = dist_[base + m];
+                if (nd < 0 || nd >= here) continue;  // downhill only
+                const int dz = surface(nx, ny, m) - z;
+                if (dz > Config::kFall || dz < -Config::kWalkClimb) continue;
+                if (best < 0 || nd < best) {
+                    best = nd;
+                    bx = nx;
+                    by = ny;
+                    bk = m;
+                }
             }
         }
         if (bx < 0) break;  // the doorstep: no lower crossing from here
         x = bx;
         y = by;
+        k = bk;
     }
     return true;
 }
@@ -362,7 +430,12 @@ void Horde::place_wave(double now) {
     const int n = cfg_.wave_zombies(wave_);
     const int nc = cfg_.active_corners();
     auto stands = [&](int x, int y) {
-        return walkable(x, y) && dist_[cell_index(x, y)] >= 0;
+        if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
+        if (surf_count(x, y) <= 0) return false;
+        const int32_t* d = &dist_[cell_index(x, y) * kSurfMax];
+        for (int k = 0; k < kSurfMax; ++k)
+            if (d[k] >= 0) return true;
+        return false;
     };
     // The anchors, all four corners: the far end of the walk, the frontier.
     // The scan sweeps the rings around each corner's asked-for centre out
@@ -416,7 +489,7 @@ void Horde::place_wave(double now) {
             }
             for (size_t k = 0; k < rungs_x.size(); ++k) {
                 if (std::abs(rungs_g[k] - level) > Config::kWalkDrop) continue;
-                const int d = dist_[cell_index(rungs_x[k], rungs_y[k])];
+                const int d = distance(rungs_x[k], rungs_y[k]);
                 if (d > best_d) {
                     best_d = d;
                     anchor_x_[c] = rungs_x[k];
@@ -438,10 +511,10 @@ void Horde::place_wave(double now) {
         ways[c].end = ways[c].dist = 0;
         if (ways[c].anchored) {
             trace_route(anchor_x_[c], anchor_y_[c], trace);
-            ways[c].dist = dist_[cell_index(anchor_x_[c], anchor_y_[c])];
+            ways[c].dist = distance(anchor_x_[c], anchor_y_[c]);
             ways[c].end = trace.empty()
                               ? kUnreachable
-                              : dist_[cell_index(trace.back().x, trace.back().y)];
+                              : distance(trace.back().x, trace.back().y);
         }
     }
     std::sort(ways, ways + 4, [](const Ranked& a, const Ranked& b) {
@@ -484,7 +557,15 @@ void Horde::place_wave(double now) {
                     }
             if (!found) { sx = px; sy = py; }
         }
-        SpawnAt s{sx, sy, back > 0 ? ground(sx, sy) : ground(px, py),
+        // The spawn stands on the floor the walk itself runs on - the
+        // anchor's best-reached surface, not the top of the column, so a
+        // wave raised beside a tunnel's mouth stands in the road, not on
+        // the wall's cap above it.
+        const auto stand_z = [&](int x, int y) {
+            const int k = best_state(x, y);
+            return surface(x, y, k < 0 ? 0 : k);
+        };
+        SpawnAt s{sx, sy, back > 0 ? stand_z(sx, sy) : stand_z(px, py),
                   now + i * cfg_.spawn_interval, corner};
         pending_.push_back(s);
     }

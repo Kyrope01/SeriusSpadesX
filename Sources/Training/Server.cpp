@@ -65,11 +65,23 @@ constexpr float kTargetRespawn = 2.0f;
 // On the course a person is always blue; the targets are green.
 constexpr int kPeople = 0, kTargets = 1;
 // A zombie fresh out of the pile walks through its own for this long,
-// until the wave has settled into single file.
-constexpr double kZombieSettle = 5.0;
+// until the wave has settled into single file. Two is enough: they are
+// born a cell apart in the clearing, and the longer window only ever
+// bought the pile its twenty seconds of standing still.
+constexpr double kZombieSettle = 2.0;
+// The dead's own answer to the walk's two-block step - a crossing the
+// field prices as one jump, though the hop it gives on its own rises a
+// block and a half and dies pressed against the face it meant to clear.
+// A stuck walker flings itself high enough to stand on what it could
+// not climb: the vault the reading promised it, paid for in one lunge.
+constexpr float kDeadPounce = -0.45f;
+constexpr double kPounceWindup = 1.0;    // this long stuck before the first fling
+constexpr double kPounceAgain = 1.2;     // and this long between two of them
 // The beat the way in's vapour blinks on: one colour this long, then the
-// other, the whole trail laid afresh with each beat.
-constexpr double kRouteBlink = 0.6;
+// other, the whole trail laid afresh with each beat. A slower beat than
+// it once kept: weight reads in the pace of the thing, as much as its
+// hold on the floor.
+constexpr double kRouteBlink = 0.8;
 
 double now_sec() {
     static const auto t0 = std::chrono::steady_clock::now();
@@ -316,6 +328,8 @@ struct Player {
     // When it stopped making progress: a stuck one jumps for a way out; the
     // spade is out of its hands while the dead walk.
     double stuck_at = -1.0;
+    // When it last flung itself at the step it could not climb.
+    double pounce_at = -1e9;
 
     bool spectator() const { return team == -1; }
     bool playing() const { return named && (team == 0 || team == 1); }
@@ -1143,12 +1157,17 @@ struct Server::Impl {
         const Player* ahead =
             p.ahead_id >= 0 ? players[static_cast<size_t>(p.ahead_id)].get() : nullptr;
         if (ahead && ahead->id != p.id && ahead->zombie && ahead->alive) {
-            // A spade's length of leeway: close enough to hold the line,
-            // far enough to let the one in front swing.
+            // A spade's length of leeway once the wave has its shape:
+            // close enough to hold the line, far enough to let the one in
+            // front swing. A fresh one walks at the heel instead - a block
+            // behind at most - for its first seconds are the pile's, and
+            // the pile leaves as one body or it stands and stands while
+            // the gap it waits on opens a spade's length at a time.
             const float dx = ahead->body.pos.x - p.body.pos.x;
             const float dy = ahead->body.pos.y - p.body.pos.y;
             const float l = std::sqrt(dx * dx + dy * dy);
-            if (l > 1.6f) {
+            const float leash = world_time - p.born_at < kZombieSettle ? 1.0f : 1.6f;
+            if (l > leash) {
                 p.body.ori = Vec3{dx / l, dy / l, 0.0f};
                 p.input.mf = true;
             } else {
@@ -1202,6 +1221,23 @@ struct Server::Impl {
             if (moved < 0.35f) {
                 if (p.stuck_at < 0.0) p.stuck_at = world_time;
                 p.input.jump = true;
+                // The fling. The reading crosses steps two blocks tall at
+                // the price of a jump, and a jump alone was never going to
+                // clear one pressed against its face - the hop rises a
+                // block and a half and the wall takes the rest out of it.
+                // So a walker still standing after what its own hop could
+                // give lunges at the step instead: thrown clear of what it
+                // faces, high enough to land standing on it, shoulder to
+                // the way out until the next try. Every walker has the
+                // same fling in it, the pack's head as much as its heel:
+                // where the leader is flung the whole line goes after.
+                if (world_time - p.stuck_at >= kPounceWindup &&
+                    world_time - p.pounce_at >= kPounceAgain && !p.body.airborne) {
+                    p.body.vel.z = kDeadPounce;
+                    p.body.vel.x += p.body.ori.x * 0.15f;
+                    p.body.vel.y += p.body.ori.y * 0.15f;
+                    p.pounce_at = world_time;
+                }
             } else {
                 p.stuck_at = -1.0;
             }
@@ -1289,8 +1325,8 @@ struct Server::Impl {
         if (!route_reading(cells)) return;
         constexpr int kStride = 2;          // a bed every couple of treads: a trail that reads unbroken
         constexpr int kMaxBeds = 240;       // ids 1..240, clear of 255
-        constexpr uint16_t kStay = 6;       // 0.6 s it keeps coming: one blink's worth
-        constexpr uint8_t kThins = 1;       // 0.1 s the last of it takes to go
+        constexpr uint16_t kStay = 7;       // 0.7 s it keeps coming: the heavier pour, one blink's worth and a little over
+        constexpr uint8_t kThins = 2;       // 0.2 s the last of it takes to go: it leaves like it settles, slowly
         // Whose beat it is: vivid orange on the even breaths, neon blue on
         // the odd, read off the clock so every resend agrees with the last.
         const bool blue =
@@ -1307,7 +1343,7 @@ struct Server::Impl {
                                Vec3{static_cast<float>(c.x) + 0.5f,
                                     static_cast<float>(c.y) + 0.5f,
                                     static_cast<float>(c.z) - 0.35f},
-                               static_cast<uint8_t>(1), r, g, b, 0xB0,
+                               static_cast<uint8_t>(1), r, g, b, 0xC8,
                                kStay, kThins, static_cast<uint8_t>(0));
             for (auto& o : players)
                 if (o && o->peer && !o->loading && o->ext_smoke && o->playing()) send(*o, bw);

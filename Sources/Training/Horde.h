@@ -60,8 +60,10 @@ struct Config {
     int spawn_size = 12;
     double prep_seconds = 20.0;
     double intermission_seconds = 12.0;
-    // Zombies trickle out, not all at once.
-    double spawn_interval = 0.35;
+    // Zombies trickle out, not all at once - though a wave that stands
+    // around being born is a wave that looks stalled: quicker than it
+    // once kept, so the horde reads as one body rising and walking.
+    double spawn_interval = 0.25;
     int wave_count_max = 8;
     int core_hp = 150;
     // How much of the core's health a cleared wave mends back.

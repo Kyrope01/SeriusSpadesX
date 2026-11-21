@@ -84,11 +84,23 @@ constexpr double kPounceAgain = 1.2;     // and this long between two of them
 // seconds of going nowhere by the field's own count, and the hop and
 // the fling the standstill gets are let loose again.
 constexpr int kZombieYoyoWindows = 6;
-// The beat the way in's vapour blinks on: one colour this long, then the
-// other, the whole trail laid afresh with each beat. A slower beat than
-// it once kept: weight reads in the pace of the thing, as much as its
-// hold on the floor.
+// The beat the way in's vapour is laid afresh on: the reading re-read,
+// the beds re-said, an obstacle answered within the beat - the trail
+// follows the ground, and the ground is moved on while the walk is on.
 constexpr double kRouteBlink = 0.8;
+// The swing of its colour: one held this long, then the other, read off
+// the clock so every send agrees with the last. Slower than it first
+// swung: a trail that changes its mind at half this pace reads
+// steadier, heavier - a lantern, not a strobe.
+constexpr double kRouteColour = 1.6;
+
+// The number of the next heel print: from one, so a zero marks an empty
+// slot and never a print. The count outlives every walk the world keeps.
+uint32_t heel_stamp() {
+    static uint32_t n = 0;
+    if (++n == 0) n = 1;
+    return n;
+}
 
 double now_sec() {
     static const auto t0 = std::chrono::steady_clock::now();
@@ -344,6 +356,20 @@ struct Player {
     int stall_windows = 0;
     // When it last flung itself at the step it could not climb.
     double pounce_at = -1e9;
+    // Its heel prints: the places its feet were set, half a pace apart,
+    // kept in a ring in the order they were walked - the pack's memory
+    // of the way it holds. The line does not follow the body in front;
+    // it follows the ground that body has walked over, so the file
+    // crosses a threshold where its leader crossed it and turns where
+    // its leader turned, and never takes the open air's straight line
+    // across a bend no leg ever made. No print is set aloft: a fling
+    // crosses ground no following foot may tread.
+    static constexpr int kHeelN = 64;   // paces of prints, in a ring
+    float heel_x[kHeelN] = {};
+    float heel_y[kHeelN] = {};
+    uint32_t heel_seq[kHeelN] = {};    // the print's number, 0 = an empty slot
+    int heel_head = 0;                  // where the next print is set
+    float heel_ref_x = 0.0f, heel_ref_y = 0.0f;   // the last print's place
 
     bool spectator() const { return team == -1; }
     bool playing() const { return named && (team == 0 || team == 1); }
@@ -1129,6 +1155,33 @@ struct Server::Impl {
         broadcast(bw, false);
     }
 
+    // The next print the follower owes a step to: the oldest print of the
+    // one ahead that its own feet have not stood on yet. A print is
+    // stood on when the walker is half a pace from it, and it is spent
+    // when the walker has come nearer a later print - a print overtaken
+    // or flung over is behind the walk and owed no step. The ring is
+    // walked newest first, the nearest distance of everything later
+    // carried down through the ages as it goes: one pass, and the last
+    // print still standing is the oldest one owed. -1: nothing owed -
+    // the line's heel is held the plain way, at the body.
+    static int ahead_print(const Player& a, float x, float y) {
+        int chosen = -1;
+        float nearer_later = -1.0f;
+        for (int k = 0; k < Player::kHeelN; ++k) {
+            const int slot =
+                (a.heel_head + Player::kHeelN - 1 - k) % Player::kHeelN;
+            const uint32_t s = a.heel_seq[slot];
+            if (s == 0) continue;                   // an empty slot is no print
+            const float ddx = a.heel_x[slot] - x;
+            const float ddy = a.heel_y[slot] - y;
+            const float d2 = ddx * ddx + ddy * ddy;
+            if (d2 >= 0.25f && (nearer_later < 0.0f || nearer_later >= d2))
+                chosen = slot;          // nothing later lies nearer: still owed
+            nearer_later = nearer_later < 0.0f ? d2 : std::min(nearer_later, d2);
+        }
+        return chosen;
+    }
+
     // A zombie's mind: its pack walks one path - it holds at the heel of the
     // zombie in front, and the one at the head reads the field, towards the
     // core. The field is the walk without the spade - stairs, ramps and
@@ -1145,6 +1198,23 @@ struct Server::Impl {
         // keeps under it; the yo-yo of a leader sent after a floor its
         // legs can never reach is advised out of existence.
         const int fz = static_cast<int>(std::floor(p.body.pos.z + 2.25f));
+        // The print of the heel: every half-pace of ground truly stood
+        // on is set into the ring, in the order it was walked. Nothing
+        // is printed in the air - a flung body crosses ground no
+        // following leg may tread; the next print says where it walked
+        // on from wherever it came down.
+        if (!p.body.airborne) {
+            const float prx = p.body.pos.x - p.heel_ref_x;
+            const float pry = p.body.pos.y - p.heel_ref_y;
+            if (prx * prx + pry * pry >= 0.25f) {
+                p.heel_x[p.heel_head] = p.body.pos.x;
+                p.heel_y[p.heel_head] = p.body.pos.y;
+                p.heel_seq[p.heel_head] = heel_stamp();
+                p.heel_ref_x = p.body.pos.x;
+                p.heel_ref_y = p.body.pos.y;
+                p.heel_head = (p.heel_head + 1) % Player::kHeelN;
+            }
+        }
         // The crowd: players pass through players in this game, so the horde
         // keeps itself apart - a soft push off any of its own inside one
         // block of reach, the weight fading with the room between them.
@@ -1182,18 +1252,34 @@ struct Server::Impl {
         const Player* ahead =
             p.ahead_id >= 0 ? players[static_cast<size_t>(p.ahead_id)].get() : nullptr;
         if (ahead && ahead->id != p.id && ahead->zombie && ahead->alive) {
-            // A spade's length of leeway once the wave has its shape:
-            // close enough to hold the line, far enough to let the one in
-            // front swing. A fresh one walks at the heel instead - a block
-            // behind at most - for its first seconds are the pile's, and
-            // the pile leaves as one body or it stands and stands while
-            // the gap it waits on opens a spade's length at a time.
-            const float dx = ahead->body.pos.x - p.body.pos.x;
-            const float dy = ahead->body.pos.y - p.body.pos.y;
-            const float l = std::sqrt(dx * dx + dy * dy);
+            // The heel held in the footsteps of the one ahead: a follower
+            // is led by the prints its leader left - the threshold it
+            // crossed, the wall it frayed along, the corner it took -
+            // and never by the open air's own straight line, which
+            // shaves the bend a threshold sat in and leaves the end of
+            // the line stranded on the wrong side of a step the leader
+            // never even saw. A spade's length of leeway once the wave
+            // has its shape: close enough to hold the line, far enough
+            // to let the one in front swing. A fresh one walks at the
+            // heel instead - a block behind at most - for its first
+            // seconds are the pile's, and the pile leaves as one body
+            // or it stands and stands while the gap it waits on opens a
+            // spade's length at a time.
+            const float adx = ahead->body.pos.x - p.body.pos.x;
+            const float ady = ahead->body.pos.y - p.body.pos.y;
+            const float l = std::sqrt(adx * adx + ady * ady);
             const float leash = world_time - p.born_at < kZombieSettle ? 1.0f : 1.6f;
-            if (l > leash) {
-                p.body.ori = Vec3{dx / l, dy / l, 0.0f};
+            const int print = ahead_print(*ahead, p.body.pos.x, p.body.pos.y);
+            if (print >= 0) {
+                const float dx = ahead->heel_x[print] - p.body.pos.x;
+                const float dy = ahead->heel_y[print] - p.body.pos.y;
+                const float dl = std::sqrt(dx * dx + dy * dy);
+                if (dl > 1e-3f) {
+                    p.body.ori = Vec3{dx / dl, dy / dl, 0.0f};
+                    p.input.mf = true;
+                }
+            } else if (l > leash) {
+                p.body.ori = Vec3{adx / l, ady / l, 0.0f};
                 p.input.mf = true;
             } else {
                 p.body.ori = ahead->body.ori;
@@ -1366,10 +1452,38 @@ struct Server::Impl {
 
     // The way in, once over: the reading the vapour stands on - the
     // traced route of the wave's ranked-first corner, from its anchor to
-    // the core's doorstep, or nothing when no corner anchors.
+    // the core's doorstep, or nothing when no corner anchors. While the
+    // wave walks, the reading begins instead at the feet of the walk's
+    // own head - the leader that has come nearest the core, on the
+    // ground it stands on: with every beat the trail is re-said from
+    // where the walk has got to, the part behind said no more, and the
+    // vapour the leader has already crossed thins out on its own - the
+    // trail looks less like a plan drawn ahead of time and more like a
+    // thing pouring out of the walker's own feet, live.
     bool route_reading(std::vector<horde::RouteCell>& cells) {
         cells.clear();
         if (!horde) return false;
+        if (horde->phase() == horde::Phase::Wave) {
+            const Player* head = nullptr;
+            int head_fd = -1;
+            for (auto& q : players) {
+                if (!q || !q->zombie || !q->alive || q->ahead_id >= 0) continue;
+                if (q->body.airborne) continue;    // no print is set in the air
+                const int qx = static_cast<int>(std::floor(q->body.pos.x));
+                const int qy = static_cast<int>(std::floor(q->body.pos.y));
+                const int qz = static_cast<int>(std::floor(q->body.pos.z + 2.25f));
+                const int fd = horde->distance(qx, qy, qz);
+                if (fd < 0 || (head != nullptr && fd >= head_fd)) continue;
+                head = q.get();
+                head_fd = fd;
+            }
+            if (head != nullptr &&
+                horde->trace_route(static_cast<int>(std::floor(head->body.pos.x)),
+                                   static_cast<int>(std::floor(head->body.pos.y)),
+                                   cells) &&
+                !cells.empty())
+                return true;
+        }
         int ax = 0, ay = 0;
         if (!horde->corner_anchor(horde->ranked_corner(0), ax, ay)) return false;
         horde->trace_route(ax, ay, cells);
@@ -1401,7 +1515,7 @@ struct Server::Impl {
         // Whose beat it is: vivid orange on the even breaths, neon blue on
         // the odd, read off the clock so every resend agrees with the last.
         const bool blue =
-            static_cast<int64_t>(world_time / kRouteBlink) % 2 != 0;
+            static_cast<int64_t>(world_time / kRouteColour) % 2 != 0;
         const uint8_t r = blue ? 0x00 : 0xFF, g = blue ? 0xC8 : 0x80, b = blue ? 0xFF : 0x00;
         int bed = 0;
         for (size_t i = 0; i < cells.size(); ++i) {

@@ -80,7 +80,8 @@ namespace spades {
 				// reads as fog on the way in, never a plume over it. Its
 				// weight is the look: a puff pours big, wide and slow,
 				// barely stirs, and swells at its own leisure rather
-				// than blooming - what motion it has is its own inertia.
+				// than blooming - what motion it has is its own inertia, a
+				// settling that only ever goes down.
 				// The bed is a valley, not a lid: the pour at the centre
 				// sits on the floor, thick and out in the open, while the
 				// pour at the rim is born sinking into the ground - z is
@@ -89,13 +90,13 @@ namespace spades {
 				// earth's own occlusion thins it to a fade at the sides.
 				off.x *= r * 0.6F;
 				off.y *= r * 0.6F;
-				off.z = 0.30F + std::sqrt(off.x * off.x + off.y * off.y) * 0.55F;
-				vel = MakeVector3((SampleRandomFloat() - 0.5F) * 0.3F,
-				                  (SampleRandomFloat() - 0.5F) * 0.3F,
-				                  (SampleRandomFloat() - 0.5F) * 0.1F - 0.012F);
+				off.z = 0.36F + std::sqrt(off.x * off.x + off.y * off.y) * 0.72F;
+				vel = MakeVector3((SampleRandomFloat() - 0.5F) * 0.15F,
+				                  (SampleRandomFloat() - 0.5F) * 0.15F,
+				                  (SampleRandomFloat() - 0.5F) * 0.06F - 0.035F);
 				size = (1.0F + SampleRandomFloat() * 0.5F) * std::max(0.6F, std::min(k, 1.5F));
-				growth = 0.05F;
-				damp = 0.985F;
+				growth = 0.035F;
+				damp = 0.992F;
 			} else {
 				// A wide cloud, spreading low
 				off.x *= r;

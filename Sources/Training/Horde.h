@@ -19,7 +19,10 @@
 // wall on either side of the step is priced dearer than one with a
 // shoulder's room both ways, so a way the legs could hug against a wall -
 // where a walker jams on its corner - is walked only where the map leaves
-// no other way in. On open ground the price is one a step, as ever. The
+// no other way in, and so is a change of level: each block of climb or
+// drop a crossing spends is priced dearer than a level step, so where the
+// ground offers a flat way around its folds the march takes it and stays
+// one pack. On open, level ground the price is one a step, as ever. The
 // dead themselves still take no falling damage, but
 // the plan never feeds them into a fall it cannot lead them out of - so
 // the field takes the stairs and the ramps, and neither climbs nor pours
@@ -92,6 +95,14 @@ struct Config {
     // foliage its legs cannot cross.
     static constexpr int kWalkDrop = 5, kWalkClimb = 2;
     static constexpr int kFall = 63, kDigPenalty = 12;
+    // A crossing that changes floor is a crossing apart: the pack walks
+    // best on one level, and every block of climb or drop it spends is
+    // priced at kLevelShy steps, so the flood keeps to the flat wherever
+    // the map leaves a way around its hills and dips - a fold in the
+    // ground is taken only where it is the crossing, and the walk around
+    // it is worth kLevelShy steps a block. On level ground the price is
+    // nothing: a step a cell, as ever.
+    static constexpr int kLevelShy = 8;
     // How many corners a wave comes from: one while the route is watched,
     // more when the walk has proved itself. The walk ranks the four corners
     // by the way it reads into each and the wave takes the first few of

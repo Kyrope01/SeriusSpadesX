@@ -187,7 +187,11 @@ bool Horde::box_clear(int x, int y, int z) const {
 // was - and while it prices a crossing it asks after the shoulders: a
 // landing hedged by a wall at either side of the step pays kWallShy a
 // shoulder, so of two ways the walk takes the one with room both ways
-// wherever the map offers it. Every surface of a cell is a state of its
+// wherever the map offers it - and it keeps to one level while it is at
+// it: a change of floor pays kLevelShy a block, so where the ground
+// offers a flat way around its folds, the march takes the flats and
+// stays one pack, where a walk that rolls over every ripple comes apart
+// on them. Every surface of a cell is a state of its
 // own: which floor a walker stands on is decided where it crosses, not
 // where it starts.
 void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig) {
@@ -250,6 +254,13 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
                 } else {
                     // Reversible: what the legs take down they take back up.
                     if (dz > Config::kWalkClimb || dz < -Config::kWalkClimb) continue;
+                    // The march keeps one level where it can: each block of
+                    // climb or drop a crossing spends is kLevelShy steps
+                    // dearer than a level one, so a fold of the ground is
+                    // crossed only where it is the crossing - the pack that
+                    // walks one floor is one pack, where a march that rolls
+                    // up and down every ripple comes apart on them.
+                    nd += Config::kLevelShy * (dz < 0 ? -dz : dz);
                 }
                 // Keeps to the open: the landing's two shoulder columns,
                 // the sides the step runs past - room asks the same two

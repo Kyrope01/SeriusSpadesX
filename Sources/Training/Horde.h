@@ -10,12 +10,14 @@
 // and the headroom above), recomputed a short debounce after every edit; a
 // zombie steps to the neighbour whose distance is lowest, which is a cheapest
 // path around whatever has been built since. For now the dead walk and do not
-// dig: the walk prices only what legs can cross - a climb of kWalkClimb is a
-// jump and a drop of kWalkDrop a fall, and anything more is a wall - so the
-// field finds the stairs and the ramps, the way every walker takes. The veto
+// dig: the walk prices only what legs can cross, and the legs fear no
+// landing - a climb of kWalkClimb is a jump, and every fall is taken whole,
+// for the host leaves its dead their falling damage, so no drop is a wall
+// to them - so the field takes the stairs and the ramps up, and pours down
+// every cliff the map shows it. The veto
 // asks the field's own question the other way round: with the cell a player
-// wants to build at taken as unwalkable, is there still a route a
-// jump-fearing, fall-counting walker could take from a spawn corner to the
+// wants to build at taken as unwalkable, is there still a route a walker
+// that jumps and never fears the fall could take from a spawn corner to the
 // core?  If not, and there was one before, that block would seal the last
 // way in, and is refused. When the map is already sealed (or the field is
 // out of date), the veto fails open and the tower stands or falls as the
@@ -60,14 +62,20 @@ struct Config {
     static constexpr int kWaveBase = 12;
     static constexpr int kWaveGrowth = 8;
     static constexpr int kWaveMaxZombies = 100;
-    // How the dead cross: a climb of at most kWalkClimb is jumped and a drop
-    // of at most kWalkDrop walked. That is the field the zombies walk now -
-    // no spade in it: they take the stairs, the ramps and the notches, and a
-    // wall more than a jump stands. kFall and kDigPenalty are the prices of
-    // the dig that is turned off while the walk proves itself; the flood
-    // still knows how to charge them, and turning them back on is one flag.
-    // Cliffs taller than a fall and rooms without headroom stay unreachable.
+    // How the dead cross: a climb of at most kWalkClimb is jumped, and
+    // every fall is walked away from - the dead take no falling damage, so
+    // no drop is a wall to them. That is the field the zombies walk now -
+    // no spade in it: the stairs, the ramps and the notches are the way up,
+    // cliffs and pits are doors down, and only a climb more than a jump
+    // stands; kFall is how deep a single fall may pour. kDigPenalty is the
+    // price of the dig that is turned off while the walk proves itself;
+    // the flood still knows how to charge it, and turning it back on is
+    // one flag. Rooms without headroom stay unreachable.
     // z grows downward, so a climb is the negative side of the delta.
+    // kWalkDrop no longer bounds a crossing: it bounds a spawn. The anchor
+    // of a wave stands at its ring's own ground level, never on a perch
+    // more than kWalkDrop above it - a wave begun on a canopy lands in
+    // foliage its legs cannot cross.
     static constexpr int kWalkDrop = 5, kWalkClimb = 2;
     static constexpr int kFall = 63, kDigPenalty = 12;
     // How many corners a wave comes from: one while the route is watched,
@@ -159,9 +167,9 @@ public:
     bool near_core(int x, int y, int cells) const;
 
     // The anchor the last wave walked in from at `corner`: the nearest
-    // cell of the walk to the corner's asked-for centre, kept from the
-    // wave's placing. False when the corner never found its footing (a
-    // corner with no anchor raises nothing).
+    // cell of the walk at its own ground level to the corner's asked-for
+    // centre, kept from the wave's placing. False when the corner never
+    // found its footing (a corner with no anchor raises nothing).
     bool corner_anchor(int corner, int& x, int& y) const;
     // The way in from a cell, read off the walk: the cells one at a time,
     // each a legal crossing downhill, until the core's doorstep. The route

@@ -107,6 +107,18 @@ constexpr double kRouteColour = 1.6;
 // at a stair, a bank, a sill, the pack crosses the way it always did.
 constexpr float kPackCatch = 0.8f;
 
+// A print stepped past at this width of its side is trodden too. The
+// half-pace disc catches a walker that comes to its print - but a heel at
+// a run carries its own turning: it can cross the trail's end skimming
+// past the disc without entering it, and a print it has already overtaken,
+// standing behind it now, is owed a step of doubling back - a zigzag in
+// the open that spends the whole run's gain and more. A print the walker
+// has passed inside this width of its plane is spent like one stood on.
+// The footsteps keep their exactness where it matters: a wall is met
+// before its print's plane is crossed, so the print on the doorway's far
+// side stays owed until the door is truly walked through.
+constexpr float kPrintShoulder = 1.0f;
+
 // The number of the next heel print: from one, so a zero marks an empty
 // slot and never a print. The count outlives every walk the world keeps.
 uint32_t heel_stamp() {
@@ -1170,13 +1182,39 @@ struct Server::Impl {
 
     // The next print the follower owes a step to: the oldest print of the
     // one ahead that its own feet have not stood on yet. A print is
-    // stood on when the walker is half a pace from it, and it is spent
+    // stood on when the walker is half a pace from it, or past it at
+    // the shoulder's width, and it is spent
     // when the walker has come nearer a later print - a print overtaken
     // or flung over is behind the walk and owed no step. The ring is
     // walked newest first, the nearest distance of everything later
     // carried down through the ages as it goes: one pass, and the last
     // print still standing is the oldest one owed. -1: nothing owed -
     // the line's heel is held the plain way, at the body.
+    // Trodden beside: a print the walker has stepped past, inside the
+    // shoulder's width of its own plane. The plane is drawn between the
+    // print's neighbours in the walk, the one before it and the one after
+    // it, as far as the ring still holds either; the sequence numbers
+    // sort true neighbours from the ring's wrapped end.
+    static bool trodden_beside(const Player& a, int slot, float x, float y) {
+        const uint32_t s = a.heel_seq[slot];
+        const int before = (slot + Player::kHeelN - 1) % Player::kHeelN;
+        const int after = (slot + 1) % Player::kHeelN;
+        const bool has_before = a.heel_seq[before] != 0 && a.heel_seq[before] < s;
+        const bool has_after = a.heel_seq[after] != 0 && a.heel_seq[after] > s;
+        if (!has_before && !has_after) return false;
+        float ax = a.heel_x[slot], ay = a.heel_y[slot];
+        float bx = ax, by = ay;
+        if (has_before) { ax = a.heel_x[before]; ay = a.heel_y[before]; }
+        if (has_after) { bx = a.heel_x[after]; by = a.heel_y[after]; }
+        const float dx = bx - ax, dy = by - ay;
+        const float n = std::sqrt(dx * dx + dy * dy);
+        if (n < 1e-3f) return false;
+        const float rx = x - a.heel_x[slot], ry = y - a.heel_y[slot];
+        if (rx * dx + ry * dy <= 0.0f) return false;   // not past it yet
+        const float lat = std::fabs(rx * dy - ry * dx) / n;
+        return lat < kPrintShoulder;
+    }
+
     static int ahead_print(const Player& a, float x, float y) {
         int chosen = -1;
         float nearer_later = -1.0f;
@@ -1188,7 +1226,8 @@ struct Server::Impl {
             const float ddx = a.heel_x[slot] - x;
             const float ddy = a.heel_y[slot] - y;
             const float d2 = ddx * ddx + ddy * ddy;
-            if (d2 >= 0.25f && (nearer_later < 0.0f || nearer_later >= d2))
+            if (d2 >= 0.25f && !trodden_beside(a, slot, x, y) &&
+                (nearer_later < 0.0f || nearer_later >= d2))
                 chosen = slot;          // nothing later lies nearer: still owed
             nearer_later = nearer_later < 0.0f ? d2 : std::min(nearer_later, d2);
         }

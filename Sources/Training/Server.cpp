@@ -93,6 +93,19 @@ constexpr double kRouteBlink = 0.8;
 // swung: a trail that changes its mind at half this pace reads
 // steadier, heavier - a lantern, not a strobe.
 constexpr double kRouteColour = 1.6;
+// The file the pack holds: every walker paces itself to the one it
+// leads, and stands while that one trails more than kFileApart behind -
+// for the front of the line is the shield of the body behind it, and a
+// shield two spades ahead of the one it covers covers nobody. The hold
+// lets go only once the rear has closed inside kFileClosed, so the line
+// settles tight rather than hovering a hair under the line it opened on.
+// A hold the rear cannot answer is let go once patience runs out, and
+// the walk leads on a while whatever the rear does: no straggler
+// wedged behind a wall strands the whole pack on its behalf.
+constexpr float kFileApart = 2.2f;
+constexpr float kFileClosed = 1.1f;
+constexpr double kFilePatience = 6.0;
+constexpr double kFileRelief = 6.0;
 
 // The number of the next heel print: from one, so a zero marks an empty
 // slot and never a print. The count outlives every walk the world keeps.
@@ -370,6 +383,14 @@ struct Player {
     uint32_t heel_seq[kHeelN] = {};    // the print's number, 0 = an empty slot
     int heel_head = 0;                  // where the next print is set
     float heel_ref_x = 0.0f, heel_ref_y = 0.0f;   // the last print's place
+    // The state of its line: whether this tick it holds the way for its
+    // rear to close (read a tick late by the one ahead of it), since
+    // when the hold opened, and until when the walk was let loose on a
+    // hold the line could not keep - a rear wedged behind a wall no
+    // fling clears must not strand everybody on its behalf.
+    bool waits_file = false;
+    double wait_since = -1e9;
+    double file_free_at = -1e9;
 
     bool spectator() const { return team == -1; }
     bool playing() const { return named && (team == 0 || team == 1); }
@@ -1241,12 +1262,66 @@ struct Server::Impl {
         }
         if (horde->near_core(cx, cy, 2)) {
             // It bites, it does not walk - but it still shuffles its
-            // neighbours out of its skin.
+            // neighbours out of its skin. The line asks nothing here:
+            // at the core the fight is the line. Its hold state is
+            // closed, not left standing stale for the one behind it.
+            p.waits_file = false;
+            p.wait_since = -1e9;
             const float sl = std::sqrt(sep.x * sep.x + sep.y * sep.y);
             if (sl > 0.15f) {
                 p.body.ori = Vec3{sep.x / sl, sep.y / sl, 0.0f};
                 p.input.mf = true;
             }
+            return;
+        }
+        // The line behind, held: a pack walks as one body or it walks
+        // apart, and a pack apart is killed one at a time - the shield
+        // the pack's front makes for its rear is made of closeness, and
+        // closeness is not kept by walking, for they all walk the same
+        // pace and a gap once opened never closes by itself. It is kept
+        // by waiting: every walker paces itself to the one it leads,
+        // and stands while that one trails more than a file apart -
+        // and stands the longer when its rear stands too, for the hold
+        // climbs the line link by link and the one at the head ends up
+        // holding for the last of all. Nothing asks this at the core:
+        // there the line is the fight itself. And a hold the rear
+        // cannot answer - wedged behind a wall no fling clears - is
+        // owed patience, not the pack's life: past kFilePatience the
+        // walk leads on whatever the rear does, for kFileRelief's
+        // worth, and the shield is as tight as the line can keep it.
+        const Player* rear = nullptr;
+        float rear_d = 0.0f;
+        for (const auto& qq : players) {
+            if (!qq || qq.get() == &p || !qq->zombie || !qq->alive) continue;
+            if (qq->ahead_id != p.id) continue;
+            const float rdx = p.body.pos.x - qq->body.pos.x;
+            const float rdy = p.body.pos.y - qq->body.pos.y;
+            const float rd = std::sqrt(rdx * rdx + rdy * rdy);
+            if (rear == nullptr || rd > rear_d) { rear = qq.get(); rear_d = rd; }
+        }
+        bool waits = false;
+        if (rear != nullptr) {
+            // The hold opens beyond kFileApart and, once open, is held
+            // until the rear has truly closed inside kFileClosed - a
+            // hold that lets go the moment the rear slips back under the
+            // line it opened on keeps the line hovering loose forever.
+            const bool far = rear_d > (p.wait_since >= 0.0 ? kFileClosed : kFileApart);
+            waits = far || rear->waits_file;
+            if (world_time < p.file_free_at) waits = false;
+            if (waits && p.wait_since < 0.0) p.wait_since = world_time;
+            if (!waits) p.wait_since = -1e9;
+            if (p.wait_since >= 0.0 && world_time - p.wait_since > kFilePatience) {
+                p.wait_since = -1e9;
+                p.file_free_at = world_time + kFileRelief;
+            }
+        }
+        p.waits_file = waits;
+        if (waits) {
+            // A hold is not a standstill. The hop and the fling are owed
+            // to walls, never to the pack's own pacing.
+            p.foot_dist = -1;
+            p.stall_windows = 0;
+            p.stuck_at = -1.0;
             return;
         }
         const Player* ahead =
@@ -1281,6 +1356,16 @@ struct Server::Impl {
             } else if (l > leash) {
                 p.body.ori = Vec3{adx / l, ady / l, 0.0f};
                 p.input.mf = true;
+            } else if (ahead->waits_file) {
+                // The one ahead holds the way, and its heel holds with
+                // it: walking on means walking through it, and the pack
+                // keeps its shape standing, not shoving. The hold walks
+                // down the line the same way the walk does.
+                p.waits_file = true;
+                p.foot_dist = -1;
+                p.stall_windows = 0;
+                p.stuck_at = -1.0;
+                return;
             } else {
                 p.body.ori = ahead->body.ori;
             }

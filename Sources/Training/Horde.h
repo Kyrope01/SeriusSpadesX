@@ -15,7 +15,12 @@
 // gate an arch leaves standing closes a town. For now the dead walk, and do not
 // dig: the walk prices only what legs can cross, and the crossing is
 // reversible - a step of kWalkClimb up or down is a jump, and anything
-// more is a wall. The dead themselves still take no falling damage, but
+// more is a wall. The walk also keeps to the open: a cell hedged by a
+// wall on either side of the step is priced dearer than one with a
+// shoulder's room both ways, so a way the legs could hug against a wall -
+// where a walker jams on its corner - is walked only where the map leaves
+// no other way in. On open ground the price is one a step, as ever. The
+// dead themselves still take no falling damage, but
 // the plan never feeds them into a fall it cannot lead them out of - so
 // the field takes the stairs and the ramps, and neither climbs nor pours
 // down a cliff the map shows it. The veto
@@ -227,6 +232,12 @@ private:
     bool box_clear(int x, int y, int z) const;
     bool reach_spawn(const std::vector<int32_t>& dist) const;
     void flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig);
+    // The anchors of the four corners and the ranking of their ways in:
+    // the reading the waves place themselves by, and the one the host
+    // paints the way in from while the world waits or walks. place_wave
+    // asks it before the wave stands up; tick keeps it fresh through the
+    // waiting phases, wherever the field under it was recomputed.
+    void scout();
     void begin_wave(double now);
     void place_wave(double now);
 
@@ -246,6 +257,10 @@ private:
     std::vector<int8_t> surf_n_;
     bool field_dirty_ = false;
     double field_at_ = 0.0;
+    // Whether the anchors and the ranking still stand on the field as it
+    // was last recomputed: false once the field moved, scouted again by
+    // the next tick's waiting phase or the next wave's placing.
+    bool scouted_ = false;
     // Where the wave last walked in from, one anchor a corner (-1 for none):
     // the route the host paints is traced from here.
     int anchor_x_[4] = {-1, -1, -1, -1};

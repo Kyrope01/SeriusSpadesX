@@ -501,6 +501,17 @@ struct Server::Impl {
     // streams: the world is built on while the dead walk it, and the line
     // on the ground that was true at the first note will not stay true.
     double route_paint_next = 0.0;
+    // The trail's present coat: every tread the host has painted, and
+    // the colour the ground wore before it. A repaint that moves the line
+    // takes the old one off first - what the reading no longer walks is
+    // handed back its own colour - so the way in stays one line drawn
+    // where it truly runs, not a braid of every coat the world's edits
+    // have moved it from.
+    struct PaintedTread {
+        int x, y, z;
+        uint32_t from;
+    };
+    std::vector<PaintedTread> painted_;
     void serve_maps() {
         if (job_running && job_done.load()) {
             map_job.join();
@@ -1252,27 +1263,73 @@ struct Server::Impl {
             if (o && o->peer && !o->loading && o->ext_teamplay && o->playing()) send(*o, bw);
     }
 
-    // The way in, painted on the ground: the route the walk traced from the
-    // wave's anchor - the corner the walk ranks first, wherever the terrain
-    // leaves a way that truly arrives - its every tread's surface block
-    // recoloured. The block
-    // is set where a block already stands - the world carries no hole it
-    // did not have and no walker is sealed in - so the line is the ground
-    // itself, and a client that loads late finds the whole trail baked
-    // into the map it is sent. Repainted on a clock while the wave streams:
-    // the world is built on under the dead, and the line true at the first
-    // note will not stay true; a repaint touches only the treads the
-    // world has not already. The trail's author is id 255, nobody's slot:
-    // its colour is told once a repaint, and each tread goes out as a
-    // placed block against that colour.
+    // The way in, painted on the ground: the route the walk traced from
+    // the wave's anchor - the corner the walk ranks first, wherever the
+    // terrain leaves a way that truly arrives - its every tread's
+    // surface block recoloured. The block is set where a block already
+    // stands - the world carries no hole it did not have and no walker is
+    // sealed in - so the line is the ground itself, and a client that
+    // loads late finds the whole trail baked into the map it is sent.
+    // The trail's author is id 255, nobody's slot: its colour is told
+    // once per going out, and each tread goes out as a placed block
+    // against that colour. The reading is traced fresh by every coat:
+    // the world is built on while the dead walk it, and a coat that
+    // moved the line takes the old one off first, handing every tread it
+    // no longer walks back to the colour it wore. A tread the world has
+    // claimed since - dug away, rebuilt, painted over - is not this
+    // host's to retouch: it is forgotten, not restored. A coat that
+    // changes nothing sends nothing: repaints are quiet.
     void paint_route() {
-        int ax = 0, ay = 0;
-        if (!horde->corner_anchor(horde->ranked_corner(0), ax, ay)) return;
-        std::vector<horde::RouteCell> cells;
-        if (!horde->trace_route(ax, ay, cells)) return;
+        if (!horde) return;
         constexpr uint32_t kOrange = 0xFF8000;
         const uint32_t argb = 0x7F000000u | kOrange;
-        bool told_color = false;
+        std::vector<horde::RouteCell> cells;
+        int ax = 0, ay = 0;
+        if (horde->corner_anchor(horde->ranked_corner(0), ax, ay))
+            horde->trace_route(ax, ay, cells);
+        const auto walks_now = [&](int x, int y, int z) {
+            for (const horde::RouteCell& c : cells)
+                if (c.x == x && c.y == y && c.z == z) return true;
+            return false;
+        };
+        // The colour slot 255 last wore, so a run of one colour is told
+        // once, not a told colour a block.
+        uint32_t wore = 0;
+        bool dressed = false;
+        const auto re_colour = [&](uint32_t rgb) {
+            if (dressed && wore == rgb) return;
+            wore = rgb;
+            dressed = true;
+            ByteWriter cb;
+            cb.write_u8(static_cast<uint8_t>(PacketId::SetColor));
+            cb.write_u8(255);
+            write_color(cb, rgb);
+            broadcast(cb, true);
+        };
+        const auto tread_out = [&](int x, int y, int z) {
+            ByteWriter bw;
+            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+            bw.write_u8(255);
+            bw.write_u8(static_cast<uint8_t>(kBuildBlock));
+            bw.write_i32(x);
+            bw.write_i32(y);
+            bw.write_i32(z);
+            broadcast(bw, true);
+        };
+        // The old coat comes off: every tread the reading has left.
+        for (int i = static_cast<int>(painted_.size()) - 1; i >= 0; --i) {
+            const PaintedTread p = painted_[static_cast<size_t>(i)];
+            painted_.erase(painted_.begin() + i);
+            if (walks_now(p.x, p.y, p.z)) continue;   // still the way in
+            if (!phys_map.solid(p.x, p.y, p.z)) continue;   // the ground moved
+            if (map.color(p.x, p.y, p.z) != argb) continue;  // or it was claimed by hand
+            if (!map.build_point(p.x, p.y, p.z, p.from)) continue;
+            // The ground had this colour before the line crossed it.
+            re_colour(p.from & 0xFFFFFFu);
+            tread_out(p.x, p.y, p.z);
+        }
+        // The new coat goes on: every tread of the reading the ground
+        // does not already wear, painted where a block stands.
         for (const horde::RouteCell& c : cells) {
             // The surface the walk truly ran on, not the top of the
             // column: a route under an arch paints its tunnel's floor,
@@ -1280,24 +1337,18 @@ struct Server::Impl {
             const int z = c.z;
             if (z < 1 || z >= 62) continue;      // the bed the whole map stands on
             if (core_column_cell(c.x, c.y, z)) continue;   // the core holds
-            if (map.color(c.x, c.y, z) == argb) continue;   // already on the line
+            const uint32_t was = map.color(c.x, c.y, z);
+            if (was == argb) continue;   // already on the line
+            if (!phys_map.solid(c.x, c.y, z)) continue;   // the ground moved under the reading
             if (!map.build_point(c.x, c.y, z, argb)) continue;
-            if (!told_color) {
-                told_color = true;
-                ByteWriter cb;
-                cb.write_u8(static_cast<uint8_t>(PacketId::SetColor));
-                cb.write_u8(255);
-                write_color(cb, kOrange);
-                broadcast(cb, true);
-            }
-            ByteWriter bw;
-            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
-            bw.write_u8(255);
-            bw.write_u8(static_cast<uint8_t>(kBuildBlock));
-            bw.write_i32(c.x);
-            bw.write_i32(c.y);
-            bw.write_i32(z);
-            broadcast(bw, true);
+            for (int i = static_cast<int>(painted_.size()) - 1; i >= 0; --i)
+                if (painted_[static_cast<size_t>(i)].x == c.x &&
+                    painted_[static_cast<size_t>(i)].y == c.y &&
+                    painted_[static_cast<size_t>(i)].z == z)
+                    painted_.erase(painted_.begin() + i);   // an earlier record of the tread is spent
+            painted_.push_back(PaintedTread{c.x, c.y, z, was});
+            re_colour(kOrange);
+            tread_out(c.x, c.y, z);
         }
     }
 
@@ -1335,6 +1386,7 @@ struct Server::Impl {
                     }
                     break;
                 case horde::Phase::Intermission: {
+                    route_paint_next = 0.0;   // the next wave's way in, drawn at once
                     char text[96];
                     std::snprintf(text, sizeof text, "Wave cleared; the core mends to %d",
                                   horde->core_hp());
@@ -1348,14 +1400,20 @@ struct Server::Impl {
                     system_chat("The core has fallen. Defeat.");
                     break;
                 case horde::Phase::Prep:
+                    route_paint_next = 0.0;   // a restarted world draws its way in at once
                     break;
             }
         }
-        // While the walk streams, its line on the ground is retraced and
-        // repainted every so often: what the world has moved under the
-        // dead, the next coat tells straight.
-        if (horde->phase() == horde::Phase::Wave && world_time >= route_paint_next) {
-            route_paint_next = world_time + 30.0;
+        // While the world waits, its way in is drawn on the ground: the
+        // players build their defences while they read where the dead
+        // will walk, and the coat follows the world's every edit
+        // closely - every couple of seconds the reading is traced and
+        // the line straightened to it. While the wave walks, the world
+        // is built on under the dead anyway and the line needs its
+        // touch far less; that coat goes out on the slower clock.
+        const bool waiting = ph == horde::Phase::Prep || ph == horde::Phase::Intermission;
+        if ((waiting || ph == horde::Phase::Wave) && world_time >= route_paint_next) {
+            route_paint_next = world_time + (waiting ? 2.0 : 30.0);
             paint_route();
         }
         std::vector<horde::SpawnAt> due;

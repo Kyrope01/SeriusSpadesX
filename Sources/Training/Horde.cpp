@@ -22,6 +22,13 @@ namespace {
 
 constexpr int kMapW = SolidMap::SIZE_X, kMapH = SolidMap::SIZE_Y;
 constexpr int kUnreachable = -1;
+// The wall-shy price a crossing pays for every shoulder its landing is
+// hedged by: one wall at the shoulder is a squeeze, two a corridor - both
+// walked when nothing else runs, never hugged where the map leaves room.
+// Two a side keeps a long hug dearer than the few steps out to a road
+// with a shoulder free both ways, the way the legs read a corner: a way
+// pressed against a wall is where they jam.
+constexpr int kWallShy = 2;
 
 size_t cell_index(int x, int y) {
     return static_cast<size_t>(y) * kMapW + x;
@@ -177,8 +184,12 @@ bool Horde::box_clear(int x, int y, int z) const {
 // veto's candidate; -1 for none. 4-neighbours: corners are where zombies
 // jam on pillars, not where they cross. The edges are not all one step
 // wide, so the walk is a Dijkstra, not the breadth-first queue it once
-// was. Every surface of a cell is a state of its own: which floor a
-// walker stands on is decided where it crosses, not where it starts.
+// was - and while it prices a crossing it asks after the shoulders: a
+// landing hedged by a wall at either side of the step pays kWallShy a
+// shoulder, so of two ways the walk takes the one with room both ways
+// wherever the map offers it. Every surface of a cell is a state of its
+// own: which floor a walker stands on is decided where it crosses, not
+// where it starts.
 void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig) {
     dist.assign(static_cast<size_t>(kMapW) * kMapH * kSurfMax, kUnreachable);
     const int cx = cfg_.core_x, cy = cfg_.core_y;
@@ -240,6 +251,19 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
                     // Reversible: what the legs take down they take back up.
                     if (dz > Config::kWalkClimb || dz < -Config::kWalkClimb) continue;
                 }
+                // Keeps to the open: the landing's two shoulder columns,
+                // the sides the step runs past - room asks the same two
+                // voxels the walk demands overhead.  A map's edge is sky;
+                // on open ground this price is nothing and the walk stays
+                // a step a cell, as the traces and the tests have read it.
+                const int z2 = surf_z_[ni * kSurfMax + m];
+                const uint64_t room = 3ull << (z2 - 2);
+                const uint64_t side_a =
+                    kDx[q] != 0 ? map_.column(nx, ny + 1) : map_.column(nx + 1, ny);
+                const uint64_t side_b =
+                    kDx[q] != 0 ? map_.column(nx, ny - 1) : map_.column(nx - 1, ny);
+                if (side_a & room) nd += kWallShy;
+                if (side_b & room) nd += kWallShy;
                 const size_t ns = state(nx, ny, m);
                 if (dist[ns] != kUnreachable && dist[ns] <= nd) continue;
                 dist[ns] = nd;
@@ -288,6 +312,9 @@ void Horde::recompute() {
     // cannot. Turning the dig back on is the `true` in this call.
     flood(dist_, -1, -1, false);
     field_dirty_ = false;
+    // The reading on the old field is stale now: the next waiting tick
+    // (or the next wave) reads the anchors off this one again.
+    scouted_ = false;
 }
 
 void Horde::on_map_edited() { field_dirty_ = true; }
@@ -376,10 +403,12 @@ bool Horde::corner_anchor(int corner, int& x, int& y) const {
 // and the doorstep beside it when it is, which is where the horde stops
 // to bite. Each tread carries the surface it was walked on at, for the
 // host paints the line of march at the walk's own height, never on the
-// top of whatever column happens to stand over the road. The field is
-// all unit prices, so a traced route is exactly the walk's distance
-// long, one cell of it a step; the cap is a guard against a broken
-// field, not a route that is expected.
+// top of whatever column happens to stand over the road. On open ground
+// the field's prices are one a step, so a traced route is the walk's
+// distance long one cell of it a step; a step hedged by a wall pays its
+// shoulders dearer and the trace follows those prices downhill all the
+// same. The cap is a guard against a broken field, not a route that is
+// expected.
 bool Horde::trace_route(int x, int y, std::vector<RouteCell>& out) {
     out.clear();
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
@@ -465,7 +494,10 @@ bool Horde::can_build(int x, int y, int z) {
 // end waits behind whatever works; no anchor waits last. The wave comes
 // from the first corners of that order: systematically the way in the
 // terrain leaves, never a corner number the settings happened to name.
-// The wave is born in a clearing at the road's end: the road is walked
+// This reading is asked on its own, apart from any wave: scout() below
+// is it, and the waiting host paints the way in by it through Prep and
+// Intermission, while place_wave stands a wave on it before the wave
+// walks. The wave is born in a clearing at the road's end: the road is walked
 // the way it runs, from its far end toward the core, and the first cell
 // that opens a floor the walk itself reaches, within two of the road's
 // own height there, under a square of five by five cells four voxels
@@ -474,15 +506,10 @@ bool Horde::can_build(int x, int y, int z) {
 // within two of the site's - and a road that nowhere finds its clearing
 // piles on the anchor's own floor, whatever room its neighbours give:
 // players pass through players in this game, and the crowd's push
-// splits the pile apart as it walks. The anchors are kept - the host
-// traces the route it paints from them.
-void Horde::place_wave(double now) {
+// splits the pile apart as it walks. The anchors are kept.
+void Horde::scout() {
     if (field_dirty_) recompute();
-    const int n = cfg_.wave_zombies(wave_);
-    const int nc = cfg_.active_corners();
-    // A cell the wave's road may run on: any standing surface the field
-    // reaches. The birthing room is asked elsewhere - of the clearing the
-    // site stands in, and of each member's own column and sides.
+    // A cell the walk reaches, wherever it opens a floor to stand on.
     auto stands = [&](int x, int y) {
         if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
         if (surf_count(x, y) <= 0) return false;
@@ -582,10 +609,22 @@ void Horde::place_wave(double now) {
         return a.corner < b.corner;  // the map reads NE, NW, SE, SW last
     });
     for (int c = 0; c < 4; ++c) rank_corner_[c] = ways[c].corner;
+    scouted_ = true;
+}
+
+// The wave stands on the scout's reading: the first of the ranked corners
+// walks the way in. n zombies rise, spaced out by the spawn interval, the
+// first of them on the clearing's site and the rest on the square's
+// floors - the leader leads, the rest hold at its heel - and the anchors
+// are the scout's, so the host paints the route the wave truly takes.
+void Horde::place_wave(double now) {
+    if (!scouted_) scout();   // the reading only moves with the field
+    const int n = cfg_.wave_zombies(wave_);
+    const int nc = cfg_.active_corners();
     // The anchored ways sort to the front, so the active ranks are the
     // first few of them, however many the corners could raise.
     int ranks = 0;
-    for (int r = 0; r < nc && ways[r].anchored; ++r) ++ranks;
+    for (int r = 0; r < nc && anchor_x_[rank_corner_[r]] >= 0; ++r) ++ranks;
     // The wave stands up only where the walk truly comes in, and it is
     // born in a clearing, not in a pocket: the road is walked from its
     // far end toward the core, and the first cell whose floor - one the
@@ -683,9 +722,9 @@ void Horde::place_wave(double now) {
     };
     pending_.clear();
     for (int i = 0; i < n && ranks > 0; ++i) {
-        const Ranked& way = ways[i % ranks];
-        raise_site(way.corner);
-        const Site& s = sites[way.corner];
+        const int corner = rank_corner_[i % ranks];
+        raise_site(corner);
+        const Site& s = sites[corner];
         // The leader takes the site itself and its road; the rest fill
         // the clearing around it, and only when the clearing runs out of
         // floors does one pile on another - never on the leader, whom
@@ -694,7 +733,7 @@ void Horde::place_wave(double now) {
         size_t mi = 0;
         if (i > 0 && nm > 1) mi = 1 + static_cast<size_t>((i - 1) % (static_cast<int>(nm) - 1));
         SpawnAt a{s.mx[mi], s.my[mi], s.mz[mi],
-                  now + i * cfg_.spawn_interval, way.corner};
+                  now + i * cfg_.spawn_interval, corner};
         pending_.push_back(a);
     }
     std::sort(pending_.begin(), pending_.end(),
@@ -755,6 +794,7 @@ void Horde::tick(double now) {
     }
     switch (phase_) {
         case Phase::Prep:
+            if (!scouted_) scout();
             if (now >= phase_until_) begin_wave(now);
             break;
         case Phase::Wave:
@@ -769,6 +809,7 @@ void Horde::tick(double now) {
             }
             break;
         case Phase::Intermission:
+            if (!scouted_) scout();
             if (now >= phase_until_) begin_wave(now);
             break;
         case Phase::Victory:

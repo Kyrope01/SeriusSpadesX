@@ -384,6 +384,116 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
     return true;
 }
 
+// The standing surface of the column the walk has reached that meets the
+// feet at z: of the floors that could carry the body, the one this side
+// of its soles. Only the floors the field reaches are asked - a column
+// may carry others, but the walk has no opinion about floors it never
+// joined, and the advice read from one would be guesswork. Ties keep the
+// cheaper floor; -1 when nothing the walk reaches is near the asking
+// height. The scan the surfaces cache got is not asked for here: a floor
+// with a distance was joined through it, so its z is already in the
+// book - which is what lets this read stay const.
+int Horde::near_state(int x, int y, int z) const {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return kUnreachable;
+    const size_t i = cell_index(x, y);
+    const int32_t* d = &dist_[i * kSurfMax];
+    int bk = -1, bdz = 0;
+    for (int k = 0; k < kSurfMax; ++k) {
+        if (d[k] == kUnreachable) continue;
+        const int dz = std::abs(static_cast<int>(surf_z_[i * kSurfMax + k]) - z);
+        if (bk < 0 || dz < bdz || (dz == bdz && d[k] < d[bk])) {
+            bk = k;
+            bdz = dz;
+        }
+    }
+    return bk;
+}
+
+// The advice for a walker whose feet are at z: the same downhill read as
+// the cell's own next_step, taken from the floor the body stands on
+// instead of the cell's cheapest one. A column is not one floor - the
+// field walks a tunnel's floor as gladly as the bush standing over its
+// mouth - and the cheapest floor can be one the legs never touch from
+// where they are: the way down to it is a wall, and the way the walker
+// knows, back the way it came, is downhill from there, so a leader sent
+// chasing its own column's bargain paces between the cell it holds and
+// the cell it is told to want, forever, moving all the while. From the
+// footing the step is honest: every candidate floor of the neighbour is
+// measured against the ground underfoot, and the neighbour may promise
+// less than the tunnel's bargain and still be the true way. False on the
+// same terms as the two-argument read, which the host falls back to when
+// the feet are in the air or on a floor the walk has no opinion about.
+bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty) {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
+    if (surf_count(x, y) <= 0) return false;  // nowhere to stand
+    const int rk = near_state(x, y, zfoot);
+    const int here =
+        rk < 0 ? kUnreachable : dist_[cell_index(x, y) * kSurfMax + rk];
+    const int z = surface(x, y, rk < 0 ? 0 : rk);
+    static const int kDx[4] = {1, -1, 0, 0};
+    static const int kDy[4] = {0, 0, 1, -1};
+    int best = -1, bx = -1, by = -1;
+    for (int k = 0; k < 4; ++k) {
+        const int nx = x + kDx[k], ny = y + kDy[k];
+        if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
+        const int base = cell_index(nx, ny) * kSurfMax;
+        for (int m = 0; m < surf_count(nx, ny); ++m) {
+            const int nd = dist_[base + m];
+            if (nd < 0) continue;
+            if (here >= 0 && nd >= here) continue;  // downhill only
+            // The crossing stays priced against the footing: the read
+            // promises a step the legs can make from the ground they are
+            // on, the same both ways the field ever demands.
+            const int dz = surface(nx, ny, m) - z;
+            if (dz > Config::kWalkClimb || dz < -Config::kWalkClimb) continue;
+            if (best < 0 || nd < best) {
+                best = nd;
+                bx = nx;
+                by = ny;
+            }
+        }
+    }
+    // At the core's own cell, no step helps; that is the zombie's business.
+    if (here == 0) return false;
+    // Off the field, or holding a floor nothing near is cheaper than:
+    // head straight for the core, terrain permitting - a slow walk
+    // around a broken field, not a standstill.
+    if (bx < 0) {
+        const int cx = cfg_.core_x, cy = cfg_.core_y;
+        if (x == cx && y == cy) return false;
+        const int sx = std::abs(cx - x) >= std::abs(cy - y) ? (cx > x ? 1 : -1) : 0;
+        const int sy = sx == 0 ? (cy > y ? 1 : -1) : 0;
+        if (sx != 0 && surf_count(x + sx, y) > 0) {
+            tx = x + sx;
+            ty = y;
+            return true;
+        }
+        if (sy != 0 && surf_count(x, y + sy) > 0) {
+            tx = x;
+            ty = y + sy;
+            return true;
+        }
+        if (sx != 0 && surf_count(x, y + (cy > y ? 1 : -1)) > 0) {
+            tx = x;
+            ty = y + (cy > y ? 1 : -1);
+            return true;
+        }
+        return false;
+    }
+    tx = bx;
+    ty = by;
+    return true;
+}
+
+// The field's distance of the floor a body at z stands on: the walk read
+// at the feet, the number the host keeps window by window to tell a
+// walker that moves from a walker that gets somewhere.
+int Horde::distance(int x, int y, int z) const {
+    const int k = near_state(x, y, z);
+    if (k < 0) return kUnreachable;
+    return dist_[cell_index(x, y) * kSurfMax + k];
+}
+
 bool Horde::near_core(int x, int y, int cells) const {
     return std::abs(x - cfg_.core_x) <= cells && std::abs(y - cfg_.core_y) <= cells;
 }

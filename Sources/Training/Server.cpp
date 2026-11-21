@@ -77,6 +77,13 @@ constexpr double kZombieSettle = 2.0;
 constexpr float kDeadPounce = -0.45f;
 constexpr double kPounceWindup = 1.0;    // this long stuck before the first fling
 constexpr double kPounceAgain = 1.2;     // and this long between two of them
+// Half-second windows a leader may pace without reaching a lower floor of
+// the walk before the pacing itself is read as stuck. The yo-yo moves -
+// a half-second's worth in every window - so the moved measure never
+// calls it; the walk's distance read at the feet does. Three
+// seconds of going nowhere by the field's own count, and the hop and
+// the fling the standstill gets are let loose again.
+constexpr int kZombieYoyoWindows = 6;
 // The beat the way in's vapour blinks on: one colour this long, then the
 // other, the whole trail laid afresh with each beat. A slower beat than
 // it once kept: weight reads in the pace of the thing, as much as its
@@ -328,6 +335,13 @@ struct Player {
     // When it stopped making progress: a stuck one jumps for a way out; the
     // spade is out of its hands while the dead walk.
     double stuck_at = -1.0;
+    // The walk's distance read at its feet, kept window by window: the
+    // moving-stuck's tell. A leader that has not stood on a lower floor
+    // of the walk for kZombieYoyoWindows is pacing - the yo-yo - and is
+    // owed the standstill's way out. Followers keep no score: a heel that
+    // holds its place in the line stirs on the spot by design.
+    int foot_dist = -1;
+    int stall_windows = 0;
     // When it last flung itself at the step it could not climb.
     double pounce_at = -1e9;
 
@@ -781,6 +795,8 @@ struct Server::Impl {
             p.net_input = 0;
             p.swing_shown = false;
             p.stuck_at = -1.0;
+            p.foot_dist = -1;
+            p.stall_windows = 0;
             p.alive = true;
             p.tool = kToolWeapon;
             if (p.zombie) p.tool = kToolSpade;   // it never fires a shot
@@ -802,6 +818,8 @@ struct Server::Impl {
         } else if (p.zombie) {
             p.walk_ref = p.body.pos;
             p.walk_ref_at = world_time;
+            p.foot_dist = -1;
+            p.stall_windows = 0;
             // Its hands, not a gun: a spade, drawn by the grunts' Tool model.
             ByteWriter tool;
             tool.write_u8(static_cast<uint8_t>(PacketId::SetTool));
@@ -1120,6 +1138,13 @@ struct Server::Impl {
         p.input = physics::Input{};
         const int cx = static_cast<int>(std::floor(p.body.pos.x));
         const int cy = static_cast<int>(std::floor(p.body.pos.y));
+        // The floor its feet are on: the lowest probe of the standing box,
+        // truncated to the voxel - the same reading the surfaces are. The
+        // advice is taken from HERE, so the field is read from the ground
+        // the zombie truly stands on, not from whatever bargain its column
+        // keeps under it; the yo-yo of a leader sent after a floor its
+        // legs can never reach is advised out of existence.
+        const int fz = static_cast<int>(std::floor(p.body.pos.z + 2.25f));
         // The crowd: players pass through players in this game, so the horde
         // keeps itself apart - a soft push off any of its own inside one
         // block of reach, the weight fading with the room between them.
@@ -1178,7 +1203,13 @@ struct Server::Impl {
             // leads it - around the cliffs, when it can.
             p.ahead_id = -1;
             int tx = cx, ty = cy;
-            if (horde->next_step(cx, cy, tx, ty)) {
+            // The field read from the footing - and when the feet are in
+            // the air, or on a floor the walk has no opinion about, the
+            // cell's own read instead, the one it has always had.
+            const bool led =
+                (!p.body.airborne && horde->next_step(cx, cy, fz, tx, ty)) ||
+                horde->next_step(cx, cy, tx, ty);
+            if (led) {
                 const float dx = static_cast<float>(tx) - p.body.pos.x;
                 const float dy = static_cast<float>(ty) - p.body.pos.y;
                 const float l = std::sqrt(dx * dx + dy * dy);
@@ -1212,13 +1243,36 @@ struct Server::Impl {
         // on: a hop against a step gains none, so the jump does not wait on
         // where in its bounce the clock samples it. The walk's own answer to
         // a standstill is the hop; the spade that took walls down is out of
-        // the dead's hands while the walk proves itself.
+        // the dead's hands while the walk proves itself. And pacing is a
+        // standstill to the walk - the yo-yo of a leader that crosses to a
+        // floor it cannot hold and turns back, over and over, moves a
+        // window's worth in every window and so slips the moved measure
+        // whole. So the leader is scored by the field itself: the distance
+        // read at its feet, kept window by window, and windows without a
+        // lower floor underfoot are counted until they are the yo-yo's own
+        // three seconds - then the same hop and the same fling are owed,
+        // for whatever the pacing faces is the thing to vault, and the
+        // vault is the only way out a pacer has. A follower keeps no
+        // score: holding a heel's place in the line stirs on the spot by
+        // design.
         if (world_time - p.walk_ref_at >= 0.5) {
             const float moved = std::fabs(p.body.pos.x - p.walk_ref.x) +
                                 std::fabs(p.body.pos.y - p.walk_ref.y);
             p.walk_ref = p.body.pos;
             p.walk_ref_at = world_time;
-            if (moved < 0.35f) {
+            const int fd =
+                p.body.airborne ? -1 : horde->distance(cx, cy, fz);
+            if (p.ahead_id >= 0 || fd < 0) {
+                p.foot_dist = -1;          // off the walk or a step in line
+                p.stall_windows = 0;
+            } else if (p.foot_dist < 0 || fd < p.foot_dist) {
+                p.foot_dist = fd;          // a lower floor reached: it walks
+                p.stall_windows = 0;
+            } else {
+                ++p.stall_windows;         // moving, maybe - nearer, never
+            }
+            if (moved < 0.35f ||
+                p.stall_windows >= kZombieYoyoWindows) {
                 if (p.stuck_at < 0.0) p.stuck_at = world_time;
                 p.input.jump = true;
                 // The fling. The reading crosses steps two blocks tall at
@@ -1343,7 +1397,7 @@ struct Server::Impl {
                                Vec3{static_cast<float>(c.x) + 0.5f,
                                     static_cast<float>(c.y) + 0.5f,
                                     static_cast<float>(c.z) - 0.35f},
-                               static_cast<uint8_t>(1), r, g, b, 0xC8,
+                               static_cast<uint8_t>(1), r, g, b, 0xE0,
                                kStay, kThins, static_cast<uint8_t>(0));
             for (auto& o : players)
                 if (o && o->peer && !o->loading && o->ext_smoke && o->playing()) send(*o, bw);

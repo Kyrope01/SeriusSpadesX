@@ -182,6 +182,17 @@ public:
     // towards the core is tried first as the fallback, so a broken field
     // walk is a slow walk, not a standstill.
     bool next_step(int x, int y, int& tx, int& ty);
+    // The same advice for a walker whose feet are at z: the read is taken
+    // from the floor the body truly stands on, not the cell's cheapest one
+    // - which can be a tunnel's floor the legs can never reach from where
+    // they are, and a walker sent chasing it paces between the cell it
+    // holds and the cell it is told to want, forever. Every neighbour's
+    // candidate floor is measured against THAT footing, so the step
+    // handed back is one the legs can make without letting go of the
+    // ground. False on the same terms as the two-argument read; the host
+    // falls back to that one when the feet are in the air or on a floor
+    // the walk has no opinion about.
+    bool next_step(int x, int y, int z, int& tx, int& ty);
     // Whether a cell is within `cells` of the core, where the zombies bite.
     bool near_core(int x, int y, int cells) const;
 
@@ -200,6 +211,12 @@ public:
 
     // For tests: the field's distance from the core, or -1 unreachable.
     int distance(int x, int y) const;
+    // The field's distance of the floor a body at z stands on - the walk's
+    // own measure of whether a walker is getting anywhere, read at the
+    // feet. The cell's cheapest floor can be one the legs never touch;
+    // this one is the floor they are on, or -1 when no floor of the
+    // column near z is on the walk.
+    int distance(int x, int y, int z) const;
 
 private:
     // The most standing surfaces one column may carry: a wall's top and the
@@ -222,6 +239,11 @@ private:
     int surf_count(int x, int y);
     int surface(int x, int y, int k);
     int best_state(int x, int y) const;
+    // The standing surface of the column the walk has reached that meets
+    // the feet at z: of the floors that carry the body, the one this side
+    // of its soles. -1 when no floor the field reaches is near the
+    // asking height. Ties keep the cheaper floor.
+    int near_state(int x, int y, int z) const;
     // A body's standing room at the given floor: the walk demands two open
     // voxels, the dead stand four tall and ask leave to step. A birthplace
     // asks it of its own column and of every side, so no wave member rises

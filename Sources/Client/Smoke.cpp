@@ -73,20 +73,26 @@ namespace spades {
 				growth = 0.22F;
 				damp = 0.9F;
 			} else if (params.style == SmokeParams::Ground) {
-				// A heavy vapour lying at the floor: what lift it has it
+				// A heavy vapour lying in the floor: what lift it has it
 				// loses, the drift along the ground is a crawl, and its
 				// life is short enough that the bed never stops looking
 				// freshly poured - and it stays low, so a trail of it
 				// reads as fog on the way in, never a plume over it. Its
 				// weight is the look: a puff pours big, barely stirs,
 				// and swells at its own leisure rather than blooming.
+				// The bed is a valley, not a lid: the pour at the centre
+				// sits on the floor, thick and out in the open, while the
+				// pour at the rim is born sinking into the ground - z is
+				// down, so the further a puff lays from the bed's middle,
+				// the deeper it starts under the floor's surface, and the
+				// earth's own occlusion thins it to a fade at the sides.
 				off.x *= r * 0.6F;
 				off.y *= r * 0.6F;
-				off.z = (SampleRandomFloat() - 0.5F) * 0.25F;
+				off.z = 0.30F + std::sqrt(off.x * off.x + off.y * off.y) * 0.55F;
 				vel = MakeVector3((SampleRandomFloat() - 0.5F) * 0.8F,
 				                  (SampleRandomFloat() - 0.5F) * 0.8F,
 				                  (SampleRandomFloat() - 0.5F) * 0.24F - 0.025F);
-				size = (0.85F + SampleRandomFloat() * 0.35F) * std::max(0.6F, std::min(k, 1.5F));
+				size = (0.9F + SampleRandomFloat() * 0.4F) * std::max(0.6F, std::min(k, 1.5F));
 				growth = 0.07F;
 				damp = 0.97F;
 			} else {
@@ -140,7 +146,7 @@ namespace spades {
 			if (params.style == SmokeParams::Column)
 				interval = 0.07F / std::max(1.0F, k);
 			else if (params.style == SmokeParams::Ground)
-				interval = 0.08F;
+				interval = 0.06F;
 			else
 				interval = std::max(0.01F, 0.025F / (k * k));
 			puffTimer -= dt;

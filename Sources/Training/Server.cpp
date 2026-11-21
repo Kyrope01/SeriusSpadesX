@@ -94,6 +94,19 @@ constexpr double kRouteBlink = 0.8;
 // steadier, heavier - a lantern, not a strobe.
 constexpr double kRouteColour = 1.6;
 
+// The catch of the pack: a follower runs once its leader stands more than
+// this far ahead. Every heel of the line walks at the same pace as the one
+// it holds, so the ground never closes a gap on its own - whatever a hop, a
+// fling or a wave's first streaming out of the pile put between two walkers
+// stays between them, and the column rides strung out at whatever spacing
+// history happened to leave it. The run is the physics' own sprint, a third
+// again the walk: the leeway closes at that rate while the column keeps its
+// pace, and inside the leeway the follower walks the trail as it always has.
+// A run cannot climb - the sprint spends the step a walker otherwise takes
+// in its stride - so it is kept for the floor its ahead stands on as well:
+// at a stair, a bank, a sill, the pack crosses the way it always did.
+constexpr float kPackCatch = 0.8f;
+
 // The number of the next heel print: from one, so a zero marks an empty
 // slot and never a print. The count outlives every walk the world keeps.
 uint32_t heel_stamp() {
@@ -1277,10 +1290,17 @@ struct Server::Impl {
                 if (dl > 1e-3f) {
                     p.body.ori = Vec3{dx / dl, dy / dl, 0.0f};
                     p.input.mf = true;
+                    // The catch: the run that draws a strung-out follower
+                    // back onto its leader's heels - kept off the stairs
+                    // and banks, where a run cannot take its own step.
+                    p.input.sprint = l > kPackCatch &&
+                                    std::fabs(ahead->body.pos.z - p.body.pos.z) < 0.5f;
                 }
             } else if (l > leash) {
                 p.body.ori = Vec3{adx / l, ady / l, 0.0f};
                 p.input.mf = true;
+                p.input.sprint = l > kPackCatch &&
+                                 std::fabs(ahead->body.pos.z - p.body.pos.z) < 0.5f;
             } else {
                 p.body.ori = ahead->body.ori;
             }
@@ -2617,3 +2637,4 @@ bool Server::map_solid(int x, int y, int z) const {
 }
 
 }  // namespace host
+

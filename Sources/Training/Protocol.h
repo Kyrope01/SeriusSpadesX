@@ -260,18 +260,21 @@ void write_team_outfit(ByteWriter& bw, uint8_t team, uint8_t outfit);
 //   1  Clear Smoke  S->C  id(1)   255: every smoke
 //
 // A smoke the server puts in the world, in a colour, for a time: a wide
-// cloud on the ground or a thin rising column. A smoke's id is the
+// cloud on the ground, a thin rising column, or a heavy vapour that pools
+// at the floor and renews rather than climbs - the style the way in's
+// trail is told in, so it reads as a bed of fog a block deep, not a
+// plume over it. A smoke's id is the
 // server's: sending a smoke on an id in use stops the old one, so a
-// resent smoke replaces its column in place, and a smoke the server
+// resent smoke replaces its bed in place, and a smoke the server
 // simply stops sending burns out on its own. Style 0 grows as a cloud,
-// style 1 rises as a column; radius is in blocks (1 is the column a
-// marked way reads as line-of-sight breadcrumbs), r g b opacity are
+// style 1 rises as a column, style 2 gathers at the ground; radius is
+// in blocks (1 is one bed of the way in's trail), r g b opacity are
 // bytes of 255ths, duration and fade are tenths of a second, and flags'
-// bit 0 carries the hiss - a line of columns carries none, or the way
-// in is a racket rather than a marker. Only ever sent to a connection
+// bit 0 carries the hiss - a trail carries none, or the way in is a
+// racket rather than a marker. Only ever sent to a connection
 // that claimed the extension.
 enum class SmokeSub : uint8_t { Smoke = 0, Clear = 1 };
-enum class SmokeStyle : uint8_t { Cloud = 0, Column = 1 };
+enum class SmokeStyle : uint8_t { Cloud = 0, Column = 1, Ground = 2 };
 // The whole packet, id included: one smoke started.
 void write_smoke(ByteWriter& bw, uint8_t id, SmokeStyle style, const struct Vec3& origin,
                  uint8_t radius, uint8_t r, uint8_t g, uint8_t b, uint8_t opacity,

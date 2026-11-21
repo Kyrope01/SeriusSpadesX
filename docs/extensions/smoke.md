@@ -1,6 +1,7 @@
 # Smoke
 
-Smoke the server puts in the world: a wide cloud or a rising column, in a
+Smoke the server puts in the world: a wide cloud, a rising column, or a
+heavy vapour that pools at the floor, in a
 colour and an opacity, of a size, for a time.
 
 | ------------: | ------------- |
@@ -62,6 +63,7 @@ duration).
 |-------|--------|------|
 | 0     | Cloud  | A wide, low cloud, spreading out over its radius: a smoke screen. |
 | 1     | Column | A thin plume rising straight up from where it is: a marker. Radius sets how wide. |
+| 2     | Ground | A heavy vapour hardly a block deep, hugging the floor and renewed for its whole stay like it is freshly poured: a trail. Nothing climbs out of it. |
 
 A client draws a style it does not know as `0`.
 

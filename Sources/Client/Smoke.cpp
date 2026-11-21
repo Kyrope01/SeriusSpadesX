@@ -72,6 +72,21 @@ namespace spades {
 				size = (0.9F + SampleRandomFloat() * 0.5F) * std::max(0.6F, k);
 				growth = 0.22F;
 				damp = 0.9F;
+			} else if (params.style == SmokeParams::Ground) {
+				// A heavy vapour lying at the floor: what lift it has it
+				// loses, the drift is along the ground, and its life is
+				// short enough that the bed never stops looking freshly
+				// poured - and it stays low, so a trail of it reads as
+				// fog on the way in, never a plume over it.
+				off.x *= r * 0.6F;
+				off.y *= r * 0.6F;
+				off.z = (SampleRandomFloat() - 0.5F) * 0.25F;
+				vel = MakeVector3((SampleRandomFloat() - 0.5F) * 2.2F,
+				                  (SampleRandomFloat() - 0.5F) * 2.2F,
+				                  (SampleRandomFloat() - 0.5F) * 0.5F - 0.05F);
+				size = (0.55F + SampleRandomFloat() * 0.35F) * std::max(0.6F, std::min(k, 1.5F));
+				growth = 0.12F;
+				damp = 0.92F;
 			} else {
 				// A wide cloud, spreading low
 				off.x *= r;
@@ -89,8 +104,11 @@ namespace spades {
 			ent->SetTrajectory(params.origin + off, vel, damp, 0.0F);
 			ent->SetRotation(SampleRandomFloat() * kTwoPi);
 			ent->SetRadius(size, growth, 0.3F);
+		// A ground bed is gone almost as soon as it is poured, so a
+		// trail of it swaps its colour fast; the others can linger.
 			const float life = std::max(0.5F, std::min(untilGone, kMaxPuffLife)) +
-			                   SampleRandomFloat() * 0.5F;
+			                   SampleRandomFloat() *
+			                       (params.style == SmokeParams::Ground ? 0.15F : 0.5F);
 			ent->SetLifeTime(life, kPuffFadeIn, std::min(params.fade, life * 0.5F) + 0.01F);
 			ent->SetBlockHitAction(BlockHitAction::Ignore);
 			client.AddLocalEntity(std::move(ent));
@@ -113,11 +131,16 @@ namespace spades {
 			}
 
 			// A grenade's cloud (radius 5) puffs 40 times a second, a column 14;
-			// a bigger or smaller one in proportion to its area.
+			// a bigger or smaller one in proportion to its area. A ground bed
+			// keeps its own steady pace: freshness is the look, not volume.
 			const float k = std::max(0.2F, std::min(params.radius / 5.0F, 4.0F));
-			const float interval = params.style == SmokeParams::Column
-			                         ? 0.07F / std::max(1.0F, k)
-			                         : std::max(0.01F, 0.025F / (k * k));
+			float interval;
+			if (params.style == SmokeParams::Column)
+				interval = 0.07F / std::max(1.0F, k);
+			else if (params.style == SmokeParams::Ground)
+				interval = 0.09F;
+			else
+				interval = std::max(0.01F, 0.025F / (k * k));
 			puffTimer -= dt;
 			int budget = 64; // after a long frame, catch up only so far
 			while (puffTimer <= 0.0F && budget-- > 0) {
@@ -168,7 +191,7 @@ namespace spades {
 					SmokeParams p;
 					p.id = r.ReadByte();
 					p.style = r.ReadByte();
-					if (p.style != SmokeParams::Column)
+					if (p.style != SmokeParams::Column && p.style != SmokeParams::Ground)
 						p.style = SmokeParams::Cloud; // an unknown style: a cloud
 					const float x = r.ReadFloat(), y = r.ReadFloat(), z = r.ReadFloat();
 					p.origin = MakeVector3(x, y, z);

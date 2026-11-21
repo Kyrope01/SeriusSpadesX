@@ -67,6 +67,9 @@ constexpr int kPeople = 0, kTargets = 1;
 // A zombie fresh out of the pile walks through its own for this long,
 // until the wave has settled into single file.
 constexpr double kZombieSettle = 5.0;
+// The beat the way in's vapour blinks on: one colour this long, then the
+// other, the whole trail laid afresh with each beat.
+constexpr double kRouteBlink = 0.6;
 
 double now_sec() {
     static const auto t0 = std::chrono::steady_clock::now();
@@ -498,27 +501,11 @@ struct Server::Impl {
     // streams its wave: one marker every few seconds survives a client's
     // map load, which a single early ping never did.
     double corner_ping_next[4] = {0.0, 0.0, 0.0, 0.0};
-    // When the way in is next traced and painted again while the wave
-    // streams: the world is built on while the dead walk it, and the line
-    // on the ground that was true at the first note will not stay true.
-    double route_paint_next = 0.0;
-    // When the way in's smoke is next said again: a column burns out in
-    // nine seconds and the thread of them is renewed a second early, so
-    // whichever phase holds the field the way in never stops being said -
-    // the line on the ground and the smoke say the same way in, over the
-    // ground the paint can dress and across the bedrock it cannot.
+    // When the way in's vapour is next laid again: the trail is said in
+    // beds of ground vapour, one a blink, and the world is built on
+    // while the dead walk it - so the reading is traced over and over
+    // and the vapour never says a way in the walk has stopped walking.
     double route_smoke_next = 0.0;
-    // The trail's present coat: every tread the host has painted, and
-    // the colour the ground wore before it. A repaint that moves the line
-    // takes the old one off first - what the reading no longer walks is
-    // handed back its own colour - so the way in stays one line drawn
-    // where it truly runs, not a braid of every coat the world's edits
-    // have moved it from.
-    struct PaintedTread {
-        int x, y, z;
-        uint32_t from;
-    };
-    std::vector<PaintedTread> painted_;
     void serve_maps() {
         if (job_running && job_done.load()) {
             map_job.join();
@@ -1270,9 +1257,9 @@ struct Server::Impl {
             if (o && o->peer && !o->loading && o->ext_teamplay && o->playing()) send(*o, bw);
     }
 
-    // The way in, once over: the reading both the paint and the smoke stand
-    // on - the traced route of the wave's ranked-first corner, from its
-    // anchor to the core's doorstep, or nothing when no corner anchors.
+    // The way in, once over: the reading the vapour stands on - the
+    // traced route of the wave's ranked-first corner, from its anchor to
+    // the core's doorstep, or nothing when no corner anchors.
     bool route_reading(std::vector<horde::RouteCell>& cells) {
         cells.clear();
         if (!horde) return false;
@@ -1282,133 +1269,48 @@ struct Server::Impl {
         return !cells.empty();
     }
 
-    // The way in, breathed as smoke: the painted line ends where the ground
-    // turns to the world's bed, but the way in does not - the same reading,
-    // said along its full length as thin rising columns of orange, one
-    // every so many treads so the eye reads a line of them rather than a
-    // fog, from the wave's anchor to the core. The bedrock the paint cannot
-    // dress wears the smoke alone - as does any way in the whole of which
-    // runs on the world's floor, legal for the legs and marked like any
-    // other: no wave crosses unwarned, whichever corner the walk ranks
-    // first. Each column stands at its tread's surface, origin on the
-    // ground's own plane, where the puffs hug the floor and rise; its id is
-    // its place in the thread, so a resend replaces its column in place and
-    // a reading that no longer walks a place simply stops renewing it -
-    // that column burns out on its own, no clearing sweep to keep a stale
-    // way in hanging in the air. The same one-second overlap between the
-    // send cycle and each column's life keeps the thread standing whole,
-    // and a client that loads late only misses the thread until the next
-    // cycle says it again. Sound the columns carry none: a line of hisses
-    // is a racket, not a marker.
+    // The way in, said as heavy vapour - the only word it is said in: a
+    // continuous bed of it laid along the walk's full reading, one bed
+    // every couple of treads so the trail reads unbroken from the wave's
+    // anchor to the core's doorstep, over the dressed ground and across
+    // the world's bed alike - the legs walk the bedrock as freely as any
+    // ground, and no wave crosses unwarned. Each bed sits at its tread's
+    // floor, a cloud hardly a block across that pools rather than
+    // climbs, kept coming for its whole stay so the bed stays fresh;
+    // its id is its place in the trail, so a resend lays its vapour
+    // over the old in place, and a reading that no longer walks a place
+    // simply stops saying it - the vapour hung there thins out on its
+    // own, no clearing sweep to keep a stale way in on the air. The
+    // colour blinks vivid orange and neon blue, a beat to the breath:
+    // the one marker a defender cannot mistake for smoke of their own.
+    // Sound it carries none: a line of hisses is a racket, not a marker.
     void smoke_route() {
         std::vector<horde::RouteCell> cells;
         if (!route_reading(cells)) return;
-        constexpr int kStride = 6;             // a column every so many treads
-        constexpr int kMaxColumns = 96;        // ids 1..96, clear of 255
-        constexpr uint16_t kLife = 90;          // 9.0 s it keeps coming
-        constexpr uint8_t kFade = 20;          // 2.0 s it takes to go
-        int columns = 0;
+        constexpr int kStride = 2;          // a bed every couple of treads: a trail that reads unbroken
+        constexpr int kMaxBeds = 240;       // ids 1..240, clear of 255
+        constexpr uint16_t kStay = 6;       // 0.6 s it keeps coming: one blink's worth
+        constexpr uint8_t kThins = 1;       // 0.1 s the last of it takes to go
+        // Whose beat it is: vivid orange on the even breaths, neon blue on
+        // the odd, read off the clock so every resend agrees with the last.
+        const bool blue =
+            static_cast<int64_t>(world_time / kRouteBlink) % 2 != 0;
+        const uint8_t r = blue ? 0x00 : 0xFF, g = blue ? 0xC8 : 0x80, b = blue ? 0xFF : 0x00;
+        int bed = 0;
         for (size_t i = 0; i < cells.size(); ++i) {
-            if (i % kStride != 0 && i + 1 != cells.size()) continue;  // the last tread always says itself
-            if (columns >= kMaxColumns) break;
+            if (i % kStride != 0 && i + 1 != cells.size()) continue;  // the last tread is said whatever rhythm it falls on
+            if (bed >= kMaxBeds) break;
             const horde::RouteCell& c = cells[i];
-            ++columns;
+            ++bed;
             ByteWriter bw;
-            proto::write_smoke(bw, static_cast<uint8_t>(columns), proto::SmokeStyle::Column,
+            proto::write_smoke(bw, static_cast<uint8_t>(bed), proto::SmokeStyle::Ground,
                                Vec3{static_cast<float>(c.x) + 0.5f,
                                     static_cast<float>(c.y) + 0.5f,
-                                    static_cast<float>(c.z)},
-                               static_cast<uint8_t>(1), 0xFF, 0x80, 0x00, 0xA0,
-                               kLife, kFade, static_cast<uint8_t>(0));
+                                    static_cast<float>(c.z) - 0.35f},
+                               static_cast<uint8_t>(1), r, g, b, 0xB0,
+                               kStay, kThins, static_cast<uint8_t>(0));
             for (auto& o : players)
                 if (o && o->peer && !o->loading && o->ext_smoke && o->playing()) send(*o, bw);
-        }
-    }
-
-    // The way in, painted on the ground: the route the walk traced from
-    // the wave's anchor - the corner the walk ranks first, wherever the
-    // terrain leaves a way that truly arrives - its every tread's
-    // surface block recoloured. The block is set where a block already
-    // stands - the world carries no hole it did not have and no walker is
-    // sealed in - so the line is the ground itself, and a client that
-    // loads late finds the whole trail baked into the map it is sent.
-    // The trail's author is id 255, nobody's slot: its colour is told
-    // once per going out, and each tread goes out as a placed block
-    // against that colour. The reading is traced fresh by every coat:
-    // the world is built on while the dead walk it, and a coat that
-    // moved the line takes the old one off first, handing every tread it
-    // no longer walks back to the colour it wore. A tread the world has
-    // claimed since - dug away, rebuilt, painted over - is not this
-    // host's to retouch: it is forgotten, not restored. A coat that
-    // changes nothing sends nothing: repaints are quiet.
-    void paint_route() {
-        if (!horde) return;
-        constexpr uint32_t kOrange = 0xFF8000;
-        const uint32_t argb = 0x7F000000u | kOrange;
-        std::vector<horde::RouteCell> cells;
-        route_reading(cells);
-        const auto walks_now = [&](int x, int y, int z) {
-            for (const horde::RouteCell& c : cells)
-                if (c.x == x && c.y == y && c.z == z) return true;
-            return false;
-        };
-        // The colour slot 255 last wore, so a run of one colour is told
-        // once, not a told colour a block.
-        uint32_t wore = 0;
-        bool dressed = false;
-        const auto re_colour = [&](uint32_t rgb) {
-            if (dressed && wore == rgb) return;
-            wore = rgb;
-            dressed = true;
-            ByteWriter cb;
-            cb.write_u8(static_cast<uint8_t>(PacketId::SetColor));
-            cb.write_u8(255);
-            write_color(cb, rgb);
-            broadcast(cb, true);
-        };
-        const auto tread_out = [&](int x, int y, int z) {
-            ByteWriter bw;
-            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
-            bw.write_u8(255);
-            bw.write_u8(static_cast<uint8_t>(kBuildBlock));
-            bw.write_i32(x);
-            bw.write_i32(y);
-            bw.write_i32(z);
-            broadcast(bw, true);
-        };
-        // The old coat comes off: every tread the reading has left.
-        for (int i = static_cast<int>(painted_.size()) - 1; i >= 0; --i) {
-            const PaintedTread p = painted_[static_cast<size_t>(i)];
-            painted_.erase(painted_.begin() + i);
-            if (walks_now(p.x, p.y, p.z)) continue;   // still the way in
-            if (!phys_map.solid(p.x, p.y, p.z)) continue;   // the ground moved
-            if (map.color(p.x, p.y, p.z) != argb) continue;  // or it was claimed by hand
-            if (!map.build_point(p.x, p.y, p.z, p.from)) continue;
-            // The ground had this colour before the line crossed it.
-            re_colour(p.from & 0xFFFFFFu);
-            tread_out(p.x, p.y, p.z);
-        }
-        // The new coat goes on: every tread of the reading the ground
-        // does not already wear, painted where a block stands.
-        for (const horde::RouteCell& c : cells) {
-            // The surface the walk truly ran on, not the top of the
-            // column: a route under an arch paints its tunnel's floor,
-            // never the wall's cap above it.
-            const int z = c.z;
-            if (z < 1 || z >= 62) continue;      // the bed the whole map stands on
-            if (core_column_cell(c.x, c.y, z)) continue;   // the core holds
-            const uint32_t was = map.color(c.x, c.y, z);
-            if (was == argb) continue;   // already on the line
-            if (!phys_map.solid(c.x, c.y, z)) continue;   // the ground moved under the reading
-            if (!map.build_point(c.x, c.y, z, argb)) continue;
-            for (int i = static_cast<int>(painted_.size()) - 1; i >= 0; --i)
-                if (painted_[static_cast<size_t>(i)].x == c.x &&
-                    painted_[static_cast<size_t>(i)].y == c.y &&
-                    painted_[static_cast<size_t>(i)].z == z)
-                    painted_.erase(painted_.begin() + i);   // an earlier record of the tread is spent
-            painted_.push_back(PaintedTread{c.x, c.y, z, was});
-            re_colour(kOrange);
-            tread_out(c.x, c.y, z);
         }
     }
 
@@ -1423,12 +1325,11 @@ struct Server::Impl {
                     if (horde->wave() > horde_wave_told) {
                         horde_wave_told = horde->wave();
                         // New packs, their pings due right away, and the
-                        // way in painted before the first tread is walked.
+                        // way in's vapour laid before the first tread is walked.
                         for (int k = 0; k < 4; ++k) {
                             pack_tail[k] = -1;
                             corner_ping_next[k] = 0.0;
                         }
-                        route_paint_next = 0.0;
                         route_smoke_next = 0.0;
                         char text[96];
                         if (horde->placed() == 0) {
@@ -1447,8 +1348,7 @@ struct Server::Impl {
                     }
                     break;
                 case horde::Phase::Intermission: {
-                    route_paint_next = 0.0;   // the next wave's way in, drawn at once
-                    route_smoke_next = 0.0;  // and said in smoke just as fast
+                    route_smoke_next = 0.0;  // the next wave's way in, said again at once
                     char text[96];
                     std::snprintf(text, sizeof text, "Wave cleared; the core mends to %d",
                                   horde->core_hp());
@@ -1462,31 +1362,20 @@ struct Server::Impl {
                     system_chat("The core has fallen. Defeat.");
                     break;
                 case horde::Phase::Prep:
-                    route_paint_next = 0.0;   // a restarted world draws its way in at once
-                    route_smoke_next = 0.0;  // and breathes it out again
+                    route_smoke_next = 0.0;   // a restarted world says its way in at once
                     break;
             }
         }
-        // While the world waits, its way in is drawn on the ground: the
-        // players build their defences while they read where the dead
-        // will walk, and the coat follows the world's every edit
-        // closely - every couple of seconds the reading is traced and
-        // the line straightened to it. While the wave walks, the world
-        // is built on under the dead anyway and the line needs its
-        // touch far less; that coat goes out on the slower clock.
+        // The way in said in vapour, every blink: the trail on the ground
+        // is the one marker of where the dead walk, so while the world
+        // waits for them and while they walk it alike, the reading is
+        // traced and the beds laid again each beat - the world is built
+        // on under the reading's feet, and the vapour follows the true
+        // way in, over the dressed ground and across the bedrock the
+        // legs walk as freely as any ground.
         const bool waiting = ph == horde::Phase::Prep || ph == horde::Phase::Intermission;
-        if ((waiting || ph == horde::Phase::Wave) && world_time >= route_paint_next) {
-            route_paint_next = world_time + (waiting ? 2.0 : 30.0);
-            paint_route();
-        }
-        // The way in said in smoke, on its own cycle: a column of it burns
-        // out in nine seconds and the thread is renewed a second early, every
-        // phase through, so the smoke and the painted line tell one way in -
-        // and the smoke tells it where the paint cannot, across the bedrock
-        // the whole map stands on, which the legs walk as freely as any
-        // ground the line can dress.
         if ((waiting || ph == horde::Phase::Wave) && world_time >= route_smoke_next) {
-            route_smoke_next = world_time + 8.0;
+            route_smoke_next = world_time + kRouteBlink;
             smoke_route();
         }
         std::vector<horde::SpawnAt> due;

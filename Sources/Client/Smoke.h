@@ -38,7 +38,8 @@ namespace spades {
 		/**
 		 * Client-side state of the *Smoke* protocol extension (extension id 0x3F,
 		 * packet id 0x7F), docs/extensions/smoke.md: smoke the server puts in the
-		 * world, a cloud or a rising column, in a colour, opacity and size, for a
+		 * world - a cloud, a rising column, or a heavy vapour that pools at
+		 * the floor - in a colour, opacity and size, for a
 		 * time. Only drawn; the server decides what it means for the game.
 		 *
 		 *     0  Smoke        S->C  id(1) style(1) x y z(4 each) radius(1) r g b
@@ -46,7 +47,11 @@ namespace spades {
 		 *     1  Clear Smoke  S->C  id(1)   255: every smoke
 		 */
 		struct SmokeParams {
-			enum Style : std::uint8_t { Cloud = 0, Column = 1 };
+			// 0 spreads as a wide cloud, 1 rises as a thin column, 2 gathers
+			// as a heavy vapour that hugs the floor and renews rather than
+			// climbs - nothing rises out of it, so a trail of it lies along
+			// the ground where the eye reads it as a path.
+			enum Style : std::uint8_t { Cloud = 0, Column = 1, Ground = 2 };
 			static constexpr int kAnonymous = 255;
 
 			int id = kAnonymous;

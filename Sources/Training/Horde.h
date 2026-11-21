@@ -70,9 +70,10 @@ struct Config {
     // z grows downward, so a climb is the negative side of the delta.
     static constexpr int kWalkDrop = 5, kWalkClimb = 2;
     static constexpr int kFall = 63, kDigPenalty = 12;
-    // How many of the four corners a wave comes from: one while the route
-    // is watched, more when the walk has proved itself. The corners
-    // beyond it stay in the config but raise nothing.
+    // How many corners a wave comes from: one while the route is watched,
+    // more when the walk has proved itself. The walk ranks the four corners
+    // by the way it reads into each and the wave takes the first few of
+    // that order - anything else is a coin toss the terrain wins.
     int spawn_corners = 1;
     int active_corners() const {
         return spawn_corners < 1 ? 1 : (spawn_corners > 4 ? 4 : spawn_corners);
@@ -117,6 +118,19 @@ public:
     // Wave done when nothing waits and nothing walks.
     bool wave_cleared() const { return pending_.empty() && up_ <= 0; }
     int core_hp() const { return core_hp_; }
+    // How many zombies the last wave could truly stand up: a corner with no
+    // way in the walk can take raises nothing, and the host says so when
+    // the count falls short of the wave's price.
+    int placed() const { return placed_; }
+    // The corner of `rank` in the order the last wave walked its corners
+    // in: rank 0 is where the wave comes from, anchored, its route truly
+    // ending at the core's doorstep, the shortest first. When the terrain
+    // only offers a dead end, that reads as the rank's corner too - the
+    // walk takes whatever way the map leaves it.
+    int ranked_corner(int rank) const {
+        if (rank < 0 || rank > 3) return 0;
+        return rank_corner_[rank];
+    }
     // The settings this runs with, for the host's announcements.
     const Config& config() const { return cfg_; }
 
@@ -184,6 +198,10 @@ private:
     // the route the host paints is traced from here.
     int anchor_x_[4] = {-1, -1, -1, -1};
     int anchor_y_[4] = {0};
+    // The corners in the order the last wave walked them (rank 0 first),
+    // and how many zombies that wave truly stood up.
+    int rank_corner_[4] = {0, 1, 2, 3};
+    int placed_ = 0;
 };
 
 }  // namespace horde

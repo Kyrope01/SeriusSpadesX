@@ -163,11 +163,12 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
     }
 }
 
-// Is any cell of any active corner's box on the walk? The corners beyond
-// the active count raise nothing, and a way in nobody walks is not the
-// veto's to protect.
+// Is any cell of ANY corner's box on the walk? The veto holds out the block
+// that would seal the last way in, so every corner the map names is asked,
+// whatever order the waves have been walking them in; a way in nobody walks
+// is not the veto's to protect.
 bool Horde::reach_spawn(const std::vector<int32_t>& dist) const {
-    for (int k = 0; k < cfg_.active_corners(); ++k) {
+    for (int k = 0; k < 4; ++k) {
         const int sx = cfg_.spawn_x[k], sy = cfg_.spawn_y[k];
         const int n = cfg_.spawn_size;
         int found = 0;
@@ -322,16 +323,26 @@ bool Horde::can_build(int x, int y, int z) {
 
 // --- the waves ----------------------------------------------------------------
 
-// A wave walks in from wherever the walk reaches. Each active corner is
+// A wave walks in from wherever the walk reaches. Every corner is
 // asked for its anchor: the nearest walkable cell already on the walk,
 // scanned out ring by ring to kSpawnSearch. The corners a real map names
 // sit in border mountains and sea, and a zombie planted on a ledge the walk
 // never touches walks the ledge forever: a corner with no anchor within
-// reach is skipped, and its share of the wave is simply not raised. Back
-// cells hold the same rule, for rows of dozens reach past cliffs onto
-// ground their corner's first cell cannot see; the nearest fielded cell of
-// each row is taken, and a strip with none crowds onto the anchor. The
-// anchors are kept - the host traces the route it paints from them.
+// reach is skipped, and its share of the wave is simply not raised.
+//
+// The corners are then RANKED by the way the walk reads into each: the
+// route traced from an anchor either ends at the core's doorstep or dies
+// against a climb the legs cannot make - in a walk that cannot dig, a
+// cliff on the way in is a dead end, however freely the field spills over
+// its drop on the far side. A route that ends where the horde bites wins
+// its corner the wave's first turn, the shortest way first of all; a dead
+// end waits behind whatever works; no anchor waits last. The wave comes
+// from the first corners of that order: systematically the way in the
+// terrain leaves, never a corner number the settings happened to name.
+// Back cells hold the anchor's rule, for rows of dozens reach past cliffs
+// onto ground their corner's first cell cannot see; the nearest fielded
+// cell of each row is taken, and a strip with none crowds onto the anchor.
+// The anchors are kept - the host traces the route it paints from them.
 void Horde::place_wave(double now) {
     if (field_dirty_) recompute();
     const int n = cfg_.wave_zombies(wave_);
@@ -339,35 +350,65 @@ void Horde::place_wave(double now) {
     auto stands = [&](int x, int y) {
         return walkable(x, y) && dist_[cell_index(x, y)] >= 0;
     };
-    int ax[4] = {-1, -1, -1, -1}, ay[4] = {0, 0, 0, 0}, ag[4] = {0, 0, 0, 0};
+    // The anchors, all four corners.
     for (int c = 0; c < 4; ++c) {
         anchor_x_[c] = -1;
         anchor_y_[c] = 0;
-    }
-    for (int c = 0; c < nc; ++c) {
         const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
-        for (int r = 0; r < Config::kSpawnSearch && ax[c] < 0; ++r)
-            for (int dy = -r; dy <= r && ax[c] < 0; ++dy)
-                for (int dx = -r; dx <= r && ax[c] < 0; ++dx) {
+        for (int r = 0; r < Config::kSpawnSearch && anchor_x_[c] < 0; ++r)
+            for (int dy = -r; dy <= r && anchor_x_[c] < 0; ++dy)
+                for (int dx = -r; dx <= r && anchor_x_[c] < 0; ++dx) {
                     if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
                     const int x = cx + dx, y = cy + dy;
                     if (!stands(x, y)) continue;
-                    ax[c] = x;
-                    ay[c] = y;
-                    ag[c] = ground(x, y);
+                    anchor_x_[c] = x;
+                    anchor_y_[c] = y;
                 }
-        anchor_x_[c] = ax[c];
-        anchor_y_[c] = ay[c];
     }
+    // The ranking: each anchored corner's way in, read out loud.
+    struct Ranked {
+        int corner, end, dist;
+        bool anchored;
+    };
+    std::vector<RouteCell> trace;
+    Ranked ways[4];
+    for (int c = 0; c < 4; ++c) {
+        ways[c].corner = c;
+        ways[c].anchored = anchor_x_[c] >= 0;
+        ways[c].end = ways[c].dist = 0;
+        if (ways[c].anchored) {
+            trace_route(anchor_x_[c], anchor_y_[c], trace);
+            ways[c].dist = dist_[cell_index(anchor_x_[c], anchor_y_[c])];
+            ways[c].end = trace.empty()
+                              ? kUnreachable
+                              : dist_[cell_index(trace.back().x, trace.back().y)];
+        }
+    }
+    std::sort(ways, ways + 4, [](const Ranked& a, const Ranked& b) {
+        if (a.anchored != b.anchored) return a.anchored;
+        if (!a.anchored) return a.corner < b.corner;
+        // A way in that arrives beats one that dies against a cliff.
+        const bool a_arrives = a.end <= 1, b_arrives = b.end <= 1;
+        if (a_arrives != b_arrives) return a_arrives;
+        if (a.end != b.end) return a.end < b.end;
+        if (a.dist != b.dist) return a.dist < b.dist;
+        return a.corner < b.corner;  // the map reads NE, NW, SE, SW last
+    });
+    for (int c = 0; c < 4; ++c) rank_corner_[c] = ways[c].corner;
+    // The anchored ways sort to the front, so the active ranks are the
+    // first few of them, however many the corners could raise.
+    int ranks = 0;
+    for (int r = 0; r < nc && ways[r].anchored; ++r) ++ranks;
+    // The wave stands up only where the walk truly comes in.
     pending_.clear();
-    for (int i = 0; i < n; ++i) {
-        const int corner = i % nc;
-        const int px = ax[corner], py = ay[corner];
-        if (px < 0) continue;  // a corner the field never reaches: skip it
+    for (int i = 0; i < n && ranks > 0; ++i) {
+        const Ranked& way = ways[i % ranks];
+        const int corner = way.corner;
+        const int px = anchor_x_[corner], py = anchor_y_[corner];
         // Zombies stagger out a few cells apart so they do not march in one
-        // column: wave member i/4 stands back behind the anchor, on the side
-        // away from the core.
-        const int back = i / 4;
+        // column: wave member i/ranks stands back behind the anchor, on the
+        // side away from the core.
+        const int back = i / ranks;
         const int away = cfg_.core_y > py ? -1 : 1;
         int sx = px, sy = py + back * away;
         if (back > 0 && !stands(sx, sy)) {
@@ -383,12 +424,13 @@ void Horde::place_wave(double now) {
                     }
             if (!found) { sx = px; sy = py; }
         }
-        SpawnAt s{sx, sy, back > 0 ? ground(sx, sy) : ag[corner],
+        SpawnAt s{sx, sy, back > 0 ? ground(sx, sy) : ground(px, py),
                   now + i * cfg_.spawn_interval, corner};
         pending_.push_back(s);
     }
     std::sort(pending_.begin(), pending_.end(),
               [](const SpawnAt& a, const SpawnAt& b) { return a.at < b.at; });
+    placed_ = static_cast<int>(pending_.size());
 }
 
 void Horde::begin_wave(double now) {

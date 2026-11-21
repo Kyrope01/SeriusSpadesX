@@ -1239,7 +1239,9 @@ struct Server::Impl {
     }
 
     // The way in, painted on the ground: the route the walk traced from the
-    // wave's anchor, its every tread's surface block recoloured. The block
+    // wave's anchor - the corner the walk ranks first, wherever the terrain
+    // leaves a way that truly arrives - its every tread's surface block
+    // recoloured. The block
     // is set where a block already stands - the world carries no hole it
     // did not have and no walker is sealed in - so the line is the ground
     // itself, and a client that loads late finds the whole trail baked
@@ -1251,7 +1253,7 @@ struct Server::Impl {
     // placed block against that colour.
     void paint_route() {
         int ax = 0, ay = 0;
-        if (!horde->corner_anchor(0, ax, ay)) return;
+        if (!horde->corner_anchor(horde->ranked_corner(0), ax, ay)) return;
         std::vector<horde::RouteCell> cells;
         if (!horde->trace_route(ax, ay, cells)) return;
         constexpr uint32_t kOrange = 0xFF8000;
@@ -1300,8 +1302,18 @@ struct Server::Impl {
                         }
                         route_paint_next = 0.0;
                         char text[96];
-                        std::snprintf(text, sizeof text, "Wave %d: %d zombies coming",
-                                      horde->wave(), horde->config().wave_zombies(horde->wave()));
+                        if (horde->placed() == 0) {
+                            // The walk priced every corner and none of them
+                            // stands on it: without a spade there is no way
+                            // in, and saying so beats a wave that clears
+                            // itself in silence.
+                            std::snprintf(text, sizeof text,
+                                          "Wave %d: no way in the walk can take",
+                                          horde->wave());
+                        } else {
+                            std::snprintf(text, sizeof text, "Wave %d: %d zombies coming",
+                                          horde->wave(), horde->placed());
+                        }
                         system_chat(text);
                     }
                     break;

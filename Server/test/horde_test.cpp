@@ -216,10 +216,11 @@ void test_waves() {
     bool one_corner = true;
     for (const horde::SpawnAt& s : due) {
         if (s.z != GROUND_TOP) on_ground = false;  // due holds the last eleven
-        if (s.corner != 0) one_corner = false;
+        if (s.corner != h.ranked_corner(0)) one_corner = false;
     }
     check(on_ground, "spawn cells stand on the ground they were picked for");
-    check(one_corner, "one corner open: every zombie walks out of corner zero");
+    check(one_corner && h.ranked_corner(0) == 3,
+          "one corner open: every zombie walks out of the corner the walk ranks first");
     check(!h.wave_cleared(), "twelve walking is not a cleared wave");
     h.on_core_damaged(50);
     check(h.phase() == horde::Phase::Wave && h.core_hp() == 100, "the core takes a hit");
@@ -319,22 +320,50 @@ void test_route() {
         check(h.corner_anchor(0, ax, ay), "a sealed core still anchors its corner");
         check(std::max(std::abs(ax - 100), std::abs(ay - 100)) <= 5,
               "the anchor stands where the field still does: inside the ring");
+        check(h.ranked_corner(0) == 0,
+              "the only corner on the field is the one the wave takes");
+    }
+    // Nothing anywhere: a core sealed away and every corner far beyond the
+    // field's reach - no anchor for anyone, and the wave stands down
+    // instead of clearing itself in silence.
+    {
+        SolidMap map;
+        plain(map);
+        ring(map, Ring{100, 100, 6, -1, -1});
+        horde::Config cfg = horde_cfg(100, 100);
+        cfg.spawn_x[0] = 460; cfg.spawn_y[0] = 460;  // the near corner gone too
+        horde::Horde h(map, cfg);
+        h.restart(0.0);
+        h.tick(10.5);
+        check(h.placed() == 0, "every corner out of the walk's reach: nothing stands up");
+        std::vector<horde::SpawnAt> due;
+        check(!h.take_due(due, 100.0) && h.zombies_up() == 0, "nothing streams");
+        check(h.wave_cleared(), "the wave stands down");
     }
     {
         SolidMap map;
         plain(map);
         // A wall 200 cells out around corner zero: the search never sees a
-        // cell of the field, so the corner stays unanchored.
+        // cell of the field, so the corner stays unanchored - and the wave
+        // turns to a corner the walk can truly reach instead of standing
+        // down.
         ring(map, Ring{32, 32, 200, -1, -1});
         horde::Horde h(map, horde_cfg(256, 256));
         h.restart(0.0);
         h.tick(10.5);
         int ax = 0, ay = 0;
         check(!h.corner_anchor(0, ax, ay), "a corner the field never reaches holds no anchor");
+        check(h.ranked_corner(0) == 3,
+              "a sealed corner is passed over for one the walk reaches");
+        check(h.placed() == 12, "the wave stands up elsewhere");
         std::vector<horde::SpawnAt> due;
-        check(!h.take_due(due, 100.0), "nothing spawns off an unanchored corner");
-        check(h.zombies_up() == 0, "no zombies stood up");
-        check(h.wave_cleared(), "a wave that never stood is cleared");
+        check(h.take_due(due, 100.0), "the wave still streams");
+        bool from_rank_three = true;
+        for (const horde::SpawnAt& s : due)
+            if (s.corner != 3) from_rank_three = false;
+        check(from_rank_three && h.zombies_up() == 12,
+              "the whole wave walks in from the corner the walk found");
+        check(!h.wave_cleared(), "a wave that found its way in is not cleared");
     }
 }
 

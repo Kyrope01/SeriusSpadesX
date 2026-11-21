@@ -271,6 +271,7 @@ struct Player {
     bool ext_teamplay = false;
     bool ext_flashlight = false;   // claimed Flashlight (0x32)
     bool ext_outfit = false;      // claimed Player Outfit (0x35)
+    bool ext_smoke = false;       // claimed Smoke (0x3F)
     // The walk and jump flags the zombies' clients were last told, and the
     // bite whose swing packet has yet to be closed. Real players tell the
     // clients these things themselves; the horde is told for them.
@@ -501,6 +502,12 @@ struct Server::Impl {
     // streams: the world is built on while the dead walk it, and the line
     // on the ground that was true at the first note will not stay true.
     double route_paint_next = 0.0;
+    // When the way in's smoke is next said again: a column burns out in
+    // nine seconds and the thread of them is renewed a second early, so
+    // whichever phase holds the field the way in never stops being said -
+    // the line on the ground and the smoke say the same way in, over the
+    // ground the paint can dress and across the bedrock it cannot.
+    double route_smoke_next = 0.0;
     // The trail's present coat: every tread the host has painted, and
     // the colour the ground wore before it. A repaint that moves the line
     // takes the old one off first - what the reading no longer walks is
@@ -1263,6 +1270,61 @@ struct Server::Impl {
             if (o && o->peer && !o->loading && o->ext_teamplay && o->playing()) send(*o, bw);
     }
 
+    // The way in, once over: the reading both the paint and the smoke stand
+    // on - the traced route of the wave's ranked-first corner, from its
+    // anchor to the core's doorstep, or nothing when no corner anchors.
+    bool route_reading(std::vector<horde::RouteCell>& cells) {
+        cells.clear();
+        if (!horde) return false;
+        int ax = 0, ay = 0;
+        if (!horde->corner_anchor(horde->ranked_corner(0), ax, ay)) return false;
+        horde->trace_route(ax, ay, cells);
+        return !cells.empty();
+    }
+
+    // The way in, breathed as smoke: the painted line ends where the ground
+    // turns to the world's bed, but the way in does not - the same reading,
+    // said along its full length as thin rising columns of orange, one
+    // every so many treads so the eye reads a line of them rather than a
+    // fog, from the wave's anchor to the core. The bedrock the paint cannot
+    // dress wears the smoke alone - as does any way in the whole of which
+    // runs on the world's floor, legal for the legs and marked like any
+    // other: no wave crosses unwarned, whichever corner the walk ranks
+    // first. Each column stands at its tread's surface, origin on the
+    // ground's own plane, where the puffs hug the floor and rise; its id is
+    // its place in the thread, so a resend replaces its column in place and
+    // a reading that no longer walks a place simply stops renewing it -
+    // that column burns out on its own, no clearing sweep to keep a stale
+    // way in hanging in the air. The same one-second overlap between the
+    // send cycle and each column's life keeps the thread standing whole,
+    // and a client that loads late only misses the thread until the next
+    // cycle says it again. Sound the columns carry none: a line of hisses
+    // is a racket, not a marker.
+    void smoke_route() {
+        std::vector<horde::RouteCell> cells;
+        if (!route_reading(cells)) return;
+        constexpr int kStride = 6;             // a column every so many treads
+        constexpr int kMaxColumns = 96;        // ids 1..96, clear of 255
+        constexpr uint16_t kLife = 90;          // 9.0 s it keeps coming
+        constexpr uint8_t kFade = 20;          // 2.0 s it takes to go
+        int columns = 0;
+        for (size_t i = 0; i < cells.size(); ++i) {
+            if (i % kStride != 0 && i + 1 != cells.size()) continue;  // the last tread always says itself
+            if (columns >= kMaxColumns) break;
+            const horde::RouteCell& c = cells[i];
+            ++columns;
+            ByteWriter bw;
+            proto::write_smoke(bw, static_cast<uint8_t>(columns), proto::SmokeStyle::Column,
+                               Vec3{static_cast<float>(c.x) + 0.5f,
+                                    static_cast<float>(c.y) + 0.5f,
+                                    static_cast<float>(c.z)},
+                               static_cast<uint8_t>(1), 0xFF, 0x80, 0x00, 0xA0,
+                               kLife, kFade, static_cast<uint8_t>(0));
+            for (auto& o : players)
+                if (o && o->peer && !o->loading && o->ext_smoke && o->playing()) send(*o, bw);
+        }
+    }
+
     // The way in, painted on the ground: the route the walk traced from
     // the wave's anchor - the corner the walk ranks first, wherever the
     // terrain leaves a way that truly arrives - its every tread's
@@ -1284,9 +1346,7 @@ struct Server::Impl {
         constexpr uint32_t kOrange = 0xFF8000;
         const uint32_t argb = 0x7F000000u | kOrange;
         std::vector<horde::RouteCell> cells;
-        int ax = 0, ay = 0;
-        if (horde->corner_anchor(horde->ranked_corner(0), ax, ay))
-            horde->trace_route(ax, ay, cells);
+        route_reading(cells);
         const auto walks_now = [&](int x, int y, int z) {
             for (const horde::RouteCell& c : cells)
                 if (c.x == x && c.y == y && c.z == z) return true;
@@ -1369,6 +1429,7 @@ struct Server::Impl {
                             corner_ping_next[k] = 0.0;
                         }
                         route_paint_next = 0.0;
+                        route_smoke_next = 0.0;
                         char text[96];
                         if (horde->placed() == 0) {
                             // The walk priced every corner and none of them
@@ -1387,6 +1448,7 @@ struct Server::Impl {
                     break;
                 case horde::Phase::Intermission: {
                     route_paint_next = 0.0;   // the next wave's way in, drawn at once
+                    route_smoke_next = 0.0;  // and said in smoke just as fast
                     char text[96];
                     std::snprintf(text, sizeof text, "Wave cleared; the core mends to %d",
                                   horde->core_hp());
@@ -1401,6 +1463,7 @@ struct Server::Impl {
                     break;
                 case horde::Phase::Prep:
                     route_paint_next = 0.0;   // a restarted world draws its way in at once
+                    route_smoke_next = 0.0;  // and breathes it out again
                     break;
             }
         }
@@ -1415,6 +1478,16 @@ struct Server::Impl {
         if ((waiting || ph == horde::Phase::Wave) && world_time >= route_paint_next) {
             route_paint_next = world_time + (waiting ? 2.0 : 30.0);
             paint_route();
+        }
+        // The way in said in smoke, on its own cycle: a column of it burns
+        // out in nine seconds and the thread is renewed a second early, every
+        // phase through, so the smoke and the painted line tell one way in -
+        // and the smoke tells it where the paint cannot, across the bedrock
+        // the whole map stands on, which the legs walk as freely as any
+        // ground the line can dress.
+        if ((waiting || ph == horde::Phase::Wave) && world_time >= route_smoke_next) {
+            route_smoke_next = world_time + 8.0;
+            smoke_route();
         }
         std::vector<horde::SpawnAt> due;
         while (horde->take_due(due, world_time)) {
@@ -1745,10 +1818,10 @@ struct Server::Impl {
             case PacketId::VersionResponse: {
                 p.client_info = true;
                 // Offered: kick reasons, Teamplay, the lights (flashlights and
-                // the time of day), message types and the outfits.
+                // the time of day), message types, the outfits and the smoke.
                 ByteWriter bw;
                 bw.write_u8(static_cast<uint8_t>(PacketId::ExtensionInfo));
-                bw.write_u8(6);
+                bw.write_u8(7);
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::ChatType));
                 bw.write_u8(1);
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::Teamplay));
@@ -1760,6 +1833,8 @@ struct Server::Impl {
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::DaytimeWeather));
                 bw.write_u8(1);
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::PlayerOutfit));
+                bw.write_u8(1);
+                bw.write_u8(static_cast<uint8_t>(proto::Extension::Smoke));
                 bw.write_u8(1);
                 send(p, bw);
             } break;
@@ -1805,6 +1880,10 @@ struct Server::Impl {
                     else send(p, outfits_bytes);
                 }
                 p.ext_outfit = po;
+                // The way in's smoke, whatever phase is running: its columns
+                // are sent on their own cycle the moment a smoke-claiming
+                // client finishes loading, so nothing is owed on the claim.
+                p.ext_smoke = m.offers(proto::Extension::Smoke);
             } break;
             case PacketId::Flashlight: on_flashlight(p, br); break;
             case PacketId::Teamplay: on_teamplay(p, br); break;

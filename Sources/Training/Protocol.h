@@ -66,6 +66,9 @@ enum class PacketId : uint8_t {
     // Player Outfit (extension 0x35): what a body is drawn from. Only ever
     // sent to a connection that claimed the extension.
     PlayerOutfit      = 117,
+    // Smoke (extension 0x3F): a smoke the server puts in the world. The
+    // way in is said in it while the dead walk; see the section below.
+    Smoke            = 127,
 };
 
 // The three guns. The protocol calls this field the gun and the packets that
@@ -161,6 +164,8 @@ enum class Extension : uint8_t {
     DaytimeWeather = 0x33,
     // What a team is drawn as, aosprotocol's player-outfit extension.
     PlayerOutfit = 0x35,
+    // A smoke the server puts in the world, in a colour, for a time.
+    Smoke = 0x3F,
     // Player ids past 31.
     PlayerLimit = 192,
     // Chat types sent as they are, for the centre-screen lines and banners.
@@ -245,5 +250,33 @@ constexpr uint8_t kOutfitZombie = 64;
 enum class OutfitSub : uint8_t { TeamOutfits = 1 };
 // The whole packet, id included: one team's outfit.
 void write_team_outfit(ByteWriter& bw, uint8_t team, uint8_t outfit);
+
+// --- Smoke (extension 0x3F, packet 127) ------------------------------------
+//
+// `[127][sub][...]`, docs/extensions/smoke.md:
+//
+//   0  Smoke        S->C  id(1) style(1) x y z(4 each) radius(1) r g b
+//                           opacity(1 each) duration(2) fade(1) flags(1)
+//   1  Clear Smoke  S->C  id(1)   255: every smoke
+//
+// A smoke the server puts in the world, in a colour, for a time: a wide
+// cloud on the ground or a thin rising column. A smoke's id is the
+// server's: sending a smoke on an id in use stops the old one, so a
+// resent smoke replaces its column in place, and a smoke the server
+// simply stops sending burns out on its own. Style 0 grows as a cloud,
+// style 1 rises as a column; radius is in blocks (1 is the column a
+// marked way reads as line-of-sight breadcrumbs), r g b opacity are
+// bytes of 255ths, duration and fade are tenths of a second, and flags'
+// bit 0 carries the hiss - a line of columns carries none, or the way
+// in is a racket rather than a marker. Only ever sent to a connection
+// that claimed the extension.
+enum class SmokeSub : uint8_t { Smoke = 0, Clear = 1 };
+enum class SmokeStyle : uint8_t { Cloud = 0, Column = 1 };
+// The whole packet, id included: one smoke started.
+void write_smoke(ByteWriter& bw, uint8_t id, SmokeStyle style, const struct Vec3& origin,
+                 uint8_t radius, uint8_t r, uint8_t g, uint8_t b, uint8_t opacity,
+                 uint16_t duration_tenths, uint8_t fade_tenths, uint8_t flags);
+// The whole packet, id included: 255 clears every smoke at once.
+void write_smoke_clear(ByteWriter& bw, uint8_t id);
 
 } // namespace proto

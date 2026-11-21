@@ -604,8 +604,12 @@ void Horde::scout() {
         // A way in that arrives beats one that dies against a cliff.
         const bool a_arrives = a.end <= 1, b_arrives = b.end <= 1;
         if (a_arrives != b_arrives) return a_arrives;
-        if (a.end != b.end) return a.end < b.end;
+        // Between ways that both arrive, the shorter way walks first: how
+        // far a trace ends says whether it arrives, not how far it ran,
+        // and ranking the two by that end sent the wave down the longer
+        // way merely because it stepped onto the marker's shoulders.
         if (a.dist != b.dist) return a.dist < b.dist;
+        if (a.end != b.end) return a.end < b.end;
         return a.corner < b.corner;  // the map reads NE, NW, SE, SW last
     });
     for (int c = 0; c < 4; ++c) rank_corner_[c] = ways[c].corner;

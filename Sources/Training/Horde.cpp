@@ -116,6 +116,29 @@ int Horde::ground(int x, int y) {
     return surface(x, y, 0);
 }
 
+// A body's standing room, the host's own measure of it. The walk asks two
+// open voxels of a floor, but the dead stand taller than that and half a
+// block wide either way, and one raised where that does not fit is one
+// raised inside a wall - the pocket a cliff face keeps, the shelf under a
+// lintel, a tunnel's bore - never to leave it. A spawn floor at z asks
+// four open voxels above it, its own column's and every side's; the map
+// has no voxels past its edges, so a border cell's missing side is sky.
+// The field keeps its own two: the walk is a plan; this is a birth.
+bool Horde::clear_of(int x, int y, int z) const {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
+    if (z < 4) return false;  // not the room above, even in the open sky
+    const uint64_t window = 0xFull << (z - 4);
+    if (map_.column(x, y) & window) return false;
+    static const int kDx[4] = {1, -1, 0, 0};
+    static const int kDy[4] = {0, 0, 1, -1};
+    for (int k = 0; k < 4; ++k) {
+        const int nx = x + kDx[k], ny = y + kDy[k];
+        if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
+        if (map_.column(nx, ny) & window) return false;
+    }
+    return true;
+}
+
 // --- the field ---------------------------------------------------------------
 
 // Also see Horde.h. A walk from the core over the map's standing
@@ -432,12 +455,17 @@ void Horde::place_wave(double now) {
     if (field_dirty_) recompute();
     const int n = cfg_.wave_zombies(wave_);
     const int nc = cfg_.active_corners();
+    // A cell the wave may be raised on: on the walk, and with a body's
+    // room around the very floor it would rise at. The walk is a plan of
+    // cells; a wave member has a body, and one born where the plan happens
+    // to reach but a body cannot stand - a pockets in a cliff face, the
+    // shelf under a lintel - is born inside a wall it never leaves.
     auto stands = [&](int x, int y) {
         if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
         if (surf_count(x, y) <= 0) return false;
         const int32_t* d = &dist_[cell_index(x, y) * kSurfMax];
         for (int k = 0; k < kSurfMax; ++k)
-            if (d[k] >= 0) return true;
+            if (d[k] >= 0 && clear_of(x, y, surface(x, y, k))) return true;
         return false;
     };
     // The anchors, all four corners: the far end of the walk, the frontier.
@@ -543,7 +571,10 @@ void Horde::place_wave(double now) {
         const int px = anchor_x_[corner], py = anchor_y_[corner];
         // Zombies stagger out a few cells apart so they do not march in one
         // column: wave member i/ranks stands back behind the anchor, on the
-        // side away from the core.
+        // side away from the core. Where no clear cell answers anywhere in
+        // the search, the member is raised on the anchor itself, in the
+        // pile: players pass through players in this game, and the crowd's
+        // push splits the pile apart as it walks.
         const int back = i / ranks;
         const int away = cfg_.core_y > py ? -1 : 1;
         int sx = px, sy = py + back * away;
@@ -563,10 +594,22 @@ void Horde::place_wave(double now) {
         // The spawn stands on the floor the walk itself runs on - the
         // anchor's best-reached surface, not the top of the column, so a
         // wave raised beside a tunnel's mouth stands in the road, not on
-        // the wall's cap above it.
+        // the wall's cap above it. The best floor is kept only where a
+        // body finds room; where it does not, the clear state nearest the
+        // core is taken instead.
         const auto stand_z = [&](int x, int y) {
-            const int k = best_state(x, y);
-            return surface(x, y, k < 0 ? 0 : k);
+            int bk = best_state(x, y);
+            if (bk < 0 || !clear_of(x, y, surface(x, y, bk))) {
+                int bd = kUnreachable;
+                bk = -1;
+                const int32_t* d = &dist_[cell_index(x, y) * kSurfMax];
+                for (int k = 0; k < kSurfMax; ++k) {
+                    if (d[k] < 0 || !clear_of(x, y, surface(x, y, k))) continue;
+                    if (bk < 0 || d[k] < bd) { bd = d[k]; bk = k; }
+                }
+                if (bk < 0) bk = 0;  // nowhere clear: raised in the pile
+            }
+            return surface(x, y, bk);
         };
         SpawnAt s{sx, sy, back > 0 ? stand_z(sx, sy) : stand_z(px, py),
                   now + i * cfg_.spawn_interval, corner};

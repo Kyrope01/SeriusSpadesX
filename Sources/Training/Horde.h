@@ -209,6 +209,11 @@ private:
     int surf_count(int x, int y);
     int surface(int x, int y, int k);
     int best_state(int x, int y) const;
+    // A body's standing room at the given floor: the walk demands two open
+    // voxels, the dead stand four tall and ask leave to step. The spawn
+    // cells ask it of their own column and of every side, so no wave member
+    // rises inside a wall.
+    bool clear_of(int x, int y, int z) const;
     bool reach_spawn(const std::vector<int32_t>& dist) const;
     void flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig);
     void begin_wave(double now);

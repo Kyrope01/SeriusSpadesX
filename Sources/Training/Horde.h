@@ -92,6 +92,12 @@ struct SpawnAt {
     int corner;
 };
 
+// One treaded cell of a route: the cell on the map the line of march is
+// painted on. The host builds its route one of these at a time.
+struct RouteCell {
+    int x, y;
+};
+
 class Horde {
 public:
     Horde(const SolidMap& map, const Config& cfg);
@@ -138,11 +144,6 @@ public:
     // Whether a cell is within `cells` of the core, where the zombies bite.
     bool near_core(int x, int y, int cells) const;
 
-    // One treaded cell of a route: the cell and the ground of it. The
-    // ground is the top solid voxel of the column, z counting down.
-    struct RouteCell {
-        int x, y;
-    };
     // The anchor the last wave walked in from at `corner`: the nearest
     // cell of the walk to the corner's asked-for centre, kept from the
     // wave's placing. False when the corner never found its footing (a

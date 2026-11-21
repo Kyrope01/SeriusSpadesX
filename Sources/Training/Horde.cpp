@@ -118,18 +118,20 @@ int Horde::ground(int x, int y) {
 
 // --- the field ---------------------------------------------------------------
 
-// A walk from the core over the map's standing surfaces: the distance of
-// every floor the walking dead could reach, the floor of a tunnel under
-// its arch as much as the arch's top. Without `dig` it is the crossing
-// both the build veto asks with and the zombies themselves walk:
-// kWalkClimb a jump, and every fall taken whole - the host leaves its
-// dead their falling damage, so no drop is a wall to them - nothing dug,
-// so stairs, ramps and notches are the way up, cliffs and pits are doors
-// down, and only a climb more than a jump stands in the way. With `dig`
-// set it is the richer walk a spade-wielding zombie could make: the same
-// falls, and any climb, each block beyond the jump priced at kDigPenalty
-// steps - about the time its spade takes that block off - kept for the
-// day the dead dig again (the canopy of a forest is one such day's work).
+// Also see Horde.h. A walk from the core over the map's standing
+// surfaces: the distance of every floor the walking dead could reach, the
+// floor of a tunnel under its arch as much as the arch's top. Without `dig`
+// it is the crossing both the build veto asks with and the zombies
+// themselves walk, and the crossing is reversible: kWalkClimb a jump, and
+// a jump alone, up as down - what the legs take down they have to take
+// back up, so the walk prices no pit as a way in it cannot lead out of;
+// the dead themselves still fear no landing, but no plan
+// sends them off one. Stairs, ramps and notches are the way, and cliffs
+// and pits are walls both ways. With `dig` set it is the richer walk a
+// spade-wielding zombie could make: the falls come back, and any climb,
+// each block beyond the jump priced at kDigPenalty steps - about the
+// time its spade takes that block off - kept for the day the dead dig
+// again (the canopy of a forest is one such day's work).
 // `block_x` and `block_y` name one column held out of the walk, the
 // veto's candidate; -1 for none. 4-neighbours: corners are where zombies
 // jam on pillars, not where they cross. The edges are not all one step
@@ -194,7 +196,8 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
                     if (dz < -Config::kWalkClimb)
                         nd += Config::kDigPenalty * (-dz - Config::kWalkClimb);
                 } else {
-                    if (dz > Config::kFall || dz < -Config::kWalkClimb) continue;
+                    // Reversible: what the legs take down they take back up.
+                    if (dz > Config::kWalkClimb || dz < -Config::kWalkClimb) continue;
                 }
                 const size_t ns = state(nx, ny, m);
                 if (dist[ns] != kUnreachable && dist[ns] <= nd) continue;
@@ -269,12 +272,12 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
             if (nd < 0) continue;
             if (here >= 0 && nd >= here) continue;  // downhill only
             // The field prices the crossing: without the dig it takes only
-            // what legs cross - a jump up, any fall down, a climb more than
-            // a jump refused - so the neighbour handed back is always a
-            // step the walker can make, and the surface handed down with
+            // what legs cross both ways - a jump, up or down, nothing
+            // taller - so the neighbour handed back is always a step the
+            // walker can make and unmake, and the surface handed down with
             // it is one the legs truly reach.
             const int dz = surface(nx, ny, m) - z;
-            if (dz > Config::kFall || dz < -Config::kWalkClimb) continue;
+            if (dz > Config::kWalkClimb || dz < -Config::kWalkClimb) continue;
             if (best < 0 || nd < best) {
                 best = nd;
                 bx = nx;
@@ -327,7 +330,7 @@ bool Horde::corner_anchor(int corner, int& x, int& y) const {
 
 // The way in, one tread a cell: from wherever it starts the walk goes
 // downhill on the field, each lower surface a legal crossing (the flood
-// only ever joins surfaces a jump or a fall connect), until no lower
+// only ever joins surfaces a jump connects, up or down), until no lower
 // surface is left - the core itself when its column is not in the way,
 // and the doorstep beside it when it is, which is where the horde stops
 // to bite. Each tread carries the surface it was walked on at, for the
@@ -357,7 +360,7 @@ bool Horde::trace_route(int x, int y, std::vector<RouteCell>& out) {
                 const int nd = dist_[base + m];
                 if (nd < 0 || nd >= here) continue;  // downhill only
                 const int dz = surface(nx, ny, m) - z;
-                if (dz > Config::kFall || dz < -Config::kWalkClimb) continue;
+                if (dz > Config::kWalkClimb || dz < -Config::kWalkClimb) continue;
                 if (best < 0 || nd < best) {
                     best = nd;
                     bx = nx;

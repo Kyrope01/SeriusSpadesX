@@ -13,14 +13,15 @@
 // built since - a wall's top is one surface, and the floor of a tunnel
 // through it is another, so the walk goes under as well as over, and no
 // gate an arch leaves standing closes a town. For now the dead walk, and do not
-// dig: the walk prices only what legs can cross, and the legs fear no
-// landing - a climb of kWalkClimb is a jump, and every fall is taken whole,
-// for the host leaves its dead their falling damage, so no drop is a wall
-// to them - so the field takes the stairs and the ramps up, and pours down
-// every cliff the map shows it. The veto
+// dig: the walk prices only what legs can cross, and the crossing is
+// reversible - a step of kWalkClimb up or down is a jump, and anything
+// more is a wall. The dead themselves still take no falling damage, but
+// the plan never feeds them into a fall it cannot lead them out of - so
+// the field takes the stairs and the ramps, and neither climbs nor pours
+// down a cliff the map shows it. The veto
 // asks the field's own question the other way round: with the cell a player
 // wants to build at taken as unwalkable, is there still a route a walker
-// that jumps and never fears the fall could take from a spawn corner to the
+// could take from a spawn corner to the
 // core?  If not, and there was one before, that block would seal the last
 // way in, and is refused. When the map is already sealed (or the field is
 // out of date), the veto fails open and the tower stands or falls as the
@@ -66,15 +67,16 @@ struct Config {
     static constexpr int kWaveBase = 12;
     static constexpr int kWaveGrowth = 8;
     static constexpr int kWaveMaxZombies = 100;
-    // How the dead cross: a climb of at most kWalkClimb is jumped, and
-    // every fall is walked away from - the dead take no falling damage, so
-    // no drop is a wall to them. That is the field the zombies walk now -
-    // no spade in it: the stairs, the ramps and the notches are the way up,
-    // cliffs and pits are doors down, and only a climb more than a jump
-    // stands; kFall is how deep a single fall may pour. kDigPenalty is the
-    // price of the dig that is turned off while the walk proves itself;
-    // the flood still knows how to charge it, and turning it back on is
-    // one flag. Rooms without headroom stay unreachable.
+    // How the dead cross: the walk is reversible - a step of at most
+    // kWalkClimb, up or down, and anything more is a wall. The dead still
+    // take no falling damage, but the route never feeds them into a drop
+    // it cannot lead them out of: the stairs, the ramps and the notches
+    // are the way, and cliffs and pits wall both ways. kFall and
+    // kDigPenalty belong to the dig, turned off while the walk proves
+    // itself: kFall is how deep a single fall may pour, kDigPenalty the
+    // price of the spade's block; the flood still knows how to charge it,
+    // and turning it back on is one flag. Rooms without headroom stay
+    // unreachable.
     // z grows downward, so a climb is the negative side of the delta.
     // kWalkDrop no longer bounds a crossing: it bounds a spawn. The anchor
     // of a wave stands at its ring's own ground level, never on a perch

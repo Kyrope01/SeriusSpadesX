@@ -10,10 +10,9 @@
 // the plain's floor below: two standing surfaces in one column, the road
 // over the cap and the road through the tunnel, and the walk takes
 // whichever the legs can. One crossing is asked of it: the walk of the
-// legs - a climb of two is a
-// jump, and every fall is taken whole, for the dead take no falling damage;
-// anything more than a jump up is a wall, for they do not dig. The veto
-// asks the same walk the other way round, with the block a player wants
+// legs is reversible - a step of two is a jump, up or down, and anything
+// more is a wall, for they do not dig. The veto asks the same walk the
+// other way round, with the block a player wants
 // held out of it, and the route the host paints is read off it cell by
 // cell. The waves walk in from the far end of the walk, the borderlands
 // the terrain stops the legs in: the anchor of a corner is the longest
@@ -108,9 +107,9 @@ void test_field() {
     check(h.distance(tx, ty) < h.distance(100, 100), "next_step heads downhill");
     check(!h.next_step(256, 256, tx, ty), "at the core, no step helps");
 
-    // The crossing rules of the SPEC: a climb of two is jumped and every
-    // fall is taken whole, dead legs fear no landing; a climb of three is
-    // a cliff. Piles and pits on the plain say so.
+    // The crossing rules of the SPEC: the walk is reversible - a jump is
+    // two blocks either way, and taller than a jump is a wall both ways.
+    // Piles and pits on the plain say so.
     {
         SolidMap rough;
         plain(rough);
@@ -121,14 +120,14 @@ void test_field() {
         rough.set_block(210, 210, 31, true);
         rough.set_block(210, 210, 30, true);
         rough.set_block(210, 210, 29, true);
-        // A shallow pit at (220, 220): four down is a walk-in. The slab is
-        // taken out first - the blocks below are what a pit is floored with.
+        // A shallow pit at (220, 220): the walk no longer pours in, for
+        // four down has no way back up. The slab is taken out first - the
+        // blocks below are what a pit is floored with.
         rough.set_block(220, 220, 33, false);
         rough.set_block(220, 220, 32, false);
         rough.set_block(220, 220, 37, true);
         rough.set_block(220, 220, 36, true);
-        // A deep pit at (230, 230): six down is a fall the field dares now,
-        // and the fallback walks the dead back out of it.
+        // A deep pit at (230, 230): six down is shut the same way.
         rough.set_block(230, 230, 33, false);
         rough.set_block(230, 230, 32, false);
         rough.set_block(230, 230, 39, true);
@@ -136,17 +135,17 @@ void test_field() {
         horde::Horde hh(rough, horde_cfg(256, 256));
         check(hh.distance(200, 200) >= 0, "a pile of two is jumped onto");
         check(hh.distance(210, 210) < 0, "a pile of three is a wall: no dig, no way");
-        check(hh.distance(220, 220) >= 0, "a pit four deep is walked into");
-        check(hh.distance(230, 230) >= 0, "a pit six deep is fallen into: the dead fear no landing");
-        // The walk's edge is walked as well: from either pit the field
-        // leads out again, downhill or by the fallback's straight line.
+        check(hh.distance(220, 220) < 0, "a pit four deep: the walk keeps its feet");
+        check(hh.distance(230, 230) < 0, "a pit six deep is shut to the walk as well");
+        // The dead in a pit are still the server's to move: the field is
+        // their plan, and with no plan of its own the fallback's straight
+        // line names the next leg's step - a fall survived is not a
+        // route the walk owes them.
         int px = 0, py = 0;
-        check(hh.next_step(220, 220, px, py) &&
-                  hh.distance(px, py) < hh.distance(220, 220),
-              "from the pit, the field leads it out");
-        check(hh.next_step(230, 230, px, py) &&
-                  (px != 230 || py != 230) && hh.distance(px, py) < hh.distance(230, 230),
-              "from the deep pit, the fallback walks it out");
+        check(hh.next_step(220, 220, px, py) && (px != 220 || py != 220),
+              "from a pit off the field, the fallback names a way");
+        check(hh.next_step(230, 230, px, py) && (px != 230 || py != 230),
+              "from the deep pit, the straight line walks it out");
     }
 
     // The core's column, three blocks standing on it: its top is a walkable
@@ -429,11 +428,11 @@ void test_route() {
               "the whole wave walks in from the corner the walk found");
         check(!h.wave_cleared(), "a wave that found its way in is not cleared");
     }
-    // A mesa twenty high with the core on top: the field pours off the
-    // cliff - the dead fear no landing - and floods the plain, the plain
-    // corners anchor, and the traced route dies at the cliff's foot, where
-    // the horde stops to bite. The wave stands up all the same: a way in
-    // the walk can reach is a way in, even when the last climb is its.
+    // A mesa twenty high with the core on top: the walk is reversible, so
+    // the cliff walls both ways and keeps the field on the mesa's own top.
+    // The dead still fear no landing, but the plan never pours them off
+    // one - and no corner's reach holds a cell of the walk, so the wave
+    // stands down until the map itself is opened.
     {
         SolidMap map;
         plain(map);
@@ -442,28 +441,25 @@ void test_route() {
                 for (int k = 1; k <= 20; ++k)
                     map.set_block(x, y, GROUND_TOP - k, true);
         horde::Horde h(map, horde_cfg(256, 256));
-        check(h.distance(258, 256) >= 0, "the field pours off a cliff of twenty");
+        check(h.distance(258, 256) < 0,
+              "a cliff of twenty is a wall both ways down");
+        check(h.distance(256, 256) == 0 && h.distance(255, 256) == 1,
+              "the field stands on the mesa's own top");
         h.restart(0.0);
         h.tick(10.5);
         int ax = -1, ay = -1;
-        check(h.corner_anchor(0, ax, ay), "a plain corner anchors under the mesa");
-        std::vector<horde::RouteCell> cells;
-        check(h.trace_route(ax, ay, cells), "the route traces to the mesa");
-        check(!cells.empty() && h.distance(cells.back().x, cells.back().y) > 1 &&
-                  h.distance(cells.back().x, cells.back().y) < h.distance(ax, ay),
-              "the route ends at the cliff's foot, a bite from the core");
-        check(h.placed() == 12, "the wave stands up off the mesa all the same");
+        check(!h.corner_anchor(0, ax, ay), "a shut mesa anchors no corner");
+        check(h.placed() == 0, "nothing stands up anywhere around it");
         std::vector<horde::SpawnAt> due;
-        check(h.take_due(due, 100.0) && h.zombies_up() == 12,
-              "the wave streams in from the plain");
-        check(!h.wave_cleared(), "a wave at the cliff's foot is not cleared");
+        check(!h.take_due(due, 100.0) && h.zombies_up() == 0, "nothing streams");
+        check(h.wave_cleared(), "the wave stands down");
     }
     // The perch the wave refuses: a tower the field cannot climb stands on
-    // the corner's asked-for centre, and the far end of its reach holds
-    // the mesa's poured top and the open plain alike. The wave anchors at
-    // the frontier of the walk, on the plain the frontier stands at -
-    // never the mesa's top, never the tower - for begun on a perch it
-    // lands in foliage the legs cannot cross.
+    // the corner's asked-for centre, and those legs have one standing
+    // ground left in their reach - the mesa's own top, the cliff keeping
+    // the field off the plain. The wave anchors there, a step from the
+    // tower - never the tower itself - for begun on a perch it lands in
+    // foliage the legs cannot cross.
     {
         SolidMap map;
         plain(map);
@@ -480,9 +476,9 @@ void test_route() {
         h.restart(0.0);
         h.tick(10.5);
         int ax = -1, ay = -1;
-        check(h.corner_anchor(0, ax, ay), "the corner anchors past its tower");
-        check(ax == 457 && ay == 457,
-              "the anchor is the far plain of the reach, not a poured perch");
+        check(h.corner_anchor(0, ax, ay), "the corner anchors beside its tower");
+        check(ax == 257 && ay == 257,
+              "the anchor is the mesa's top beside the tower, never the tower");
     }
 }
 

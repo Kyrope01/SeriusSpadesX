@@ -674,12 +674,14 @@ struct Server::Impl {
     // unread (a quote inside a quoted word would lie to a simpler reader),
     // and so is any key the host does not owe. Nothing is owed: a map
     // without the file, or without a key, keeps what it already stood on.
-    // The core_position the vocabulary knows is a cell of the map and its
-    // bedrock layer, the word its tool names the ground by - the column
-    // is read off the real ground at the cell, the z only saying where
-    // the tool stood counting, so it is not parsed at all.
+    // The core_position the vocabulary knows is a cell of the map, and it
+    // may name the floor besides: a third number is the ground cell the
+    // tool speaks in (the bedrock layer of a room inside the hill), and
+    // where the core stands at the map's own cell it is the floor the
+    // column rises from - get_z cannot read a room under a roof, it
+    // would name the hill above the core's head.
     void read_map_settings(const std::string& text) {
-        map_core_x = map_core_y = -1;
+        map_core_x = map_core_y = map_core_z = -1;
         if (text.empty()) return;
         auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
         auto word_char = [](char c) {
@@ -772,9 +774,12 @@ struct Server::Impl {
             if ((key_l == "core_position" || key_l == "core") && ns.size() >= 2) {
                 map_core_x = static_cast<int>(ns[0]);
                 map_core_y = static_cast<int>(ns[1]);
+                if (ns.size() >= 3) map_core_z = static_cast<int>(ns[2]);
             }
         }
-        if (map_core_x >= 0)
+        if (map_core_x >= 0 && map_core_z >= 0)
+            log("map settings: core at %d, %d, floor %d", map_core_x, map_core_y, map_core_z);
+        else if (map_core_x >= 0)
             log("map settings: core at %d, %d", map_core_x, map_core_y);
         else
             log("map settings: no core_position; the settings' own cell stands");
@@ -807,22 +812,74 @@ struct Server::Impl {
     bool horde_mode() const { return cfg.mode == training::Mode::Horde; }
     // The core's column, built at the start: the cells out of the ground it
     // stands on, and the ground cell it stands over, which all belong to it.
-    int core_top_z = 0, core_ground_z = 0;
+    int core_top_z = 0, core_ground_z = 0, core_height = 3;
     bool core_column_cell(int x, int y, int z) const {
         if (!horde_mode()) return false;
         if (x != horde_cfg.core_x || y != horde_cfg.core_y) return false;
         return z >= core_top_z && z <= core_ground_z - 1;
     }
-    // The core stands three blocks out of the ground, in the colour of its
-    // team: everything a client needs to see where to defend. The intel
-    // drawn on top of it comes from StateData, and the dig and blast vetoes
+    // The blue tent that dresses the core: only the cells it truly placed
+    // stand in this list - whatever the tent let stand (the cave's own
+    // rock, a wall run close) is everyone's to dig, not the tent's.
+    std::vector<Cell> tent_cells;
+    bool core_tent_cell(int x, int y, int z) const {
+        if (!horde_mode()) return false;
+        for (const Cell& tc : tent_cells)
+            if (tc.x == x && tc.y == y && tc.z == z) return true;
+        return false;
+    }
+    // The core stands out of the ground in the colour of its team, a
+    // column three blocks tall read off the real ground at its cell:
+    // everything a client needs to see where to defend. The intel drawn
+    // on top of it comes from StateData, and the dig and blast vetoes
     // below keep it standing.
-    void build_core_column() {
+    //
+    // Where the floor is named, the column rises from it instead and two
+    // blocks tall: the map's own z at the map's own cell (a room inside
+    // the hill, whose floor no get_z can read - it names the first solid
+    // from above, the hill itself), or the third number of a /core word.
+    void build_core_column(int floor_z = -1) {
         const int x = horde_cfg.core_x, y = horde_cfg.core_y;
-        core_ground_z = map.get_z(x, y);
-        for (int k = 1; k <= 3; ++k)
+        int ground = 0;
+        if (floor_z >= 1 && floor_z <= 63) {
+            ground = floor_z;
+        } else if (x == map_core_x && y == map_core_y && map_core_z >= 1 && map_core_z <= 63) {
+            ground = map_core_z;
+        }
+        core_height = ground ? 2 : 3;
+        core_ground_z = ground ? ground : map.get_z(x, y);
+        for (int k = 1; k <= core_height; ++k)
             map.set(x, y, core_ground_z - k, 0x7F3080FFu);
-        core_top_z = core_ground_z - 3;
+        core_top_z = core_ground_z - core_height;
+        build_core_tent();
+    }
+
+    // The blue team's tent around the core, the dress it defends in: a
+    // ring at the foot of the column, posts at the corners rising to a
+    // roof over it, and an eye in that roof for the flag to climb
+    // through. Only the air the map already owns is clothed - whatever
+    // stands (the room's own rock, a wall run close) keeps its place and
+    // the tent simply wears less of it. King of the hill this is not:
+    // the tent is the core's, and the vetoes below keep it standing too.
+    void build_core_tent() {
+        tent_cells.clear();
+        const int cx = horde_cfg.core_x, cy = horde_cfg.core_y;
+        const int base = core_ground_z - 1;   // the ring, at the column's foot
+        const int roof = core_top_z - 1;      // the cover, the eye above the flag
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy) {
+                if (dx == 0 && dy == 0) continue;   // the column's own cell
+                stand_tent(cx + dx, cy + dy, base);
+                stand_tent(cx + dx, cy + dy, roof);
+                if (dx != 0 && dy != 0)
+                    for (int z = core_top_z; z <= core_ground_z - 2; ++z)
+                        stand_tent(cx + dx, cy + dy, z);
+            }
+    }
+    void stand_tent(int x, int y, int z) {
+        if (!VoxelMap::valid(x, y, z) || map.solid(x, y, z)) return;
+        map.set(x, y, z, 0x7F000000u | team_color[0]);
+        tent_cells.push_back(Cell{x, y, z});
     }
 
     // The column of the old column: whatever of it stands is taken down and
@@ -831,20 +888,25 @@ struct Server::Impl {
     void erase_core_column() {
         const int x = horde_cfg.core_x, y = horde_cfg.core_y;
         std::vector<Cell> removed;
-        for (int k = 1; k <= 3; ++k) {
-            const int z = core_ground_z - k;
-            if (!map.solid(x, y, z)) continue;
+        auto unstand = [&](int bx, int by, int bz) {
             ByteWriter bw;
             bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
             bw.write_u8(kTurretBlockId);
             bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
-            bw.write_i32(x);
-            bw.write_i32(y);
-            bw.write_i32(z);
+            bw.write_i32(bx);
+            bw.write_i32(by);
+            bw.write_i32(bz);
             broadcast(bw, true);
-            map.clear(x, y, z);
-            removed.push_back(Cell{x, y, z});
+            map.clear(bx, by, bz);
+            removed.push_back(Cell{bx, by, bz});
+        };
+        for (int k = 1; k <= core_height; ++k) {
+            const int z = core_ground_z - k;
+            if (map.solid(x, y, z)) unstand(x, y, z);
         }
+        for (const Cell& tc : tent_cells)
+            if (map.solid(tc.x, tc.y, tc.z)) unstand(tc.x, tc.y, tc.z);
+        tent_cells.clear();
         touched(removed, false);
     }
     // The same, said on the wire: the blocks the column is, worn in the
@@ -855,11 +917,17 @@ struct Server::Impl {
         turret_colour_said(0x3080FFu);
         std::vector<Cell> built;
         const int x = horde_cfg.core_x, y = horde_cfg.core_y;
-        for (int k = 1; k <= 3; ++k) {
+        for (int k = 1; k <= core_height; ++k) {
             const int z = core_ground_z - k;
             if (!map.solid(x, y, z)) continue;
             turret_block_built(x, y, z);
             built.push_back(Cell{x, y, z});
+        }
+        turret_colour_said(team_color[0]);
+        for (const Cell& tc : tent_cells) {
+            if (!map.solid(tc.x, tc.y, tc.z)) continue;
+            turret_block_built(tc.x, tc.y, tc.z);
+            built.push_back(tc);
         }
         touched(built, true);
     }
@@ -867,8 +935,11 @@ struct Server::Impl {
     horde::Config horde_cfg;
     // The cell the map's own settings .txt named, or -1 when it did not:
     // a map that knows where its towns stand overrides the cell the
-    // settings would have it at.
-    int map_core_x = -1, map_core_y = -1;
+    // settings would have it at - and the floor it may name besides is
+    // the cell the core stands ON at that place, the tool's own layer:
+    // the bedrock of the room its town hides in, named so the core can
+    // stand inside and not on the hill above it.
+    int map_core_x = -1, map_core_y = -1, map_core_z = -1;
     std::unique_ptr<horde::Horde> horde;
     horde::Phase horde_told = horde::Phase::Prep;
     int horde_wave_told = 0;
@@ -965,10 +1036,13 @@ struct Server::Impl {
     // The client draws an intel - Models/MapObjects/Intel.kv6 - at the
     // flag's place, which is what the core is drawn as.
     Vec3 core_intel_pos() const {
-        // The top of the core's column: after it is built, get_z is its plane.
+        // The plane the column was built to the top of, read off the
+        // built thing and not off the ground: get_z would survey the
+        // hill above the room a core stands in and plant the flag on the
+        // roof.
         return Vec3{static_cast<float>(horde_cfg.core_x) + 0.5f,
                     static_cast<float>(horde_cfg.core_y) + 0.5f,
-                    static_cast<float>(map.get_z(horde_cfg.core_x, horde_cfg.core_y))};
+                    static_cast<float>(core_top_z)};
     }
     Vec3 under_core() const {
         // Inside the bedrock the core stands on, where nothing sees it: the
@@ -1746,7 +1820,7 @@ struct Server::Impl {
     void core_state_send() {
         if (!horde_mode() || !horde) return;
         const int x = horde_cfg.core_x, y = horde_cfg.core_y;
-        const int z = map.get_z(x, y);
+        const int z = core_top_z;
         const bool again = world_time >= core_resend_next;
         if (again) core_resend_next = world_time + kTrailResend;
         if (!again && x == core_sent_x && y == core_sent_y && z == core_sent_z) return;
@@ -2035,8 +2109,10 @@ struct Server::Impl {
     // core follows at once: the zombies' field walks to it at its own next
     // reading (the same debounce an edit of the map has), the flag the
     // clients draw moves on the wire's fifth word, and the dig and blast
-    // vetoes keep whatever the column is now. A z in the word is accepted
-    // and unused: the map tools speak in bedrock layers, not heights.
+    // vetoes keep whatever the column is now. A third number names the
+    // floor the column rises from, the tool's own layer - the bedrock of
+    // a cave - and with it the column stands two blocks tall, the same
+    // reading the map's own z has; without it, the walk to land speaks.
     void core_command(Player& p, const std::string& text) {
         if (!horde_mode() || !horde) {
             system_chat("The core only stands in a horde world.", p.id);
@@ -2056,11 +2132,22 @@ struct Server::Impl {
         }
         const bool bad = ns.size() < 2 || std::isnan(ns[0]) || std::isnan(ns[1]);
         if (bad) {
-            system_chat("usage: /core x y (the cell on the map)", p.id);
+            system_chat("usage: /core x y [z] (the cell; z, the floor it stands on)",
+                        p.id);
             return;
         }
         int x = static_cast<int>(ns[0]), y = static_cast<int>(ns[1]);
-        nearest_land(x, y);
+        int floor_z = 0;
+        if (ns.size() >= 3 && ns[2] >= 1.0 && ns[2] <= 63.0)
+            floor_z = static_cast<int>(ns[2]);
+        if (floor_z) {
+            // A named floor is trusted where it stands; the walk to land
+            // reads the surface, and the floor of a room is not on it.
+            x = std::min(std::max(x, 2), 509);
+            y = std::min(std::max(y, 2), 509);
+        } else {
+            nearest_land(x, y);
+        }
         if (x == horde_cfg.core_x && y == horde_cfg.core_y) {
             system_chat("The core already stands at " + std::to_string(x) + ", " +
                              std::to_string(y) + ".", p.id);
@@ -2069,7 +2156,7 @@ struct Server::Impl {
         erase_core_column();
         horde_cfg.core_x = x;
         horde_cfg.core_y = y;
-        build_core_column();
+        build_core_column(floor_z);
         air_core_column();
         horde->move_core(x, y);
         core_resend_next = 0.0;
@@ -2185,7 +2272,8 @@ struct Server::Impl {
             if (p.ahead_id >= 0) return true;   // the line waits on its head
             if (world_time < p.spade_at + horde_cfg.dig_seconds) return true;
             if (!map.solid(tx, ty, tz)) return true;   // the field has not caught up yet
-            if (core_column_cell(tx, ty, tz)) return true;
+            if (core_column_cell(tx, ty, tz) || core_tent_cell(tx, ty, tz))
+                return true;
             std::vector<Cell> removed;
             map.destroy_point(tx, ty, tz, &removed);
             touched(removed, false);
@@ -3237,7 +3325,8 @@ struct Server::Impl {
         for (int nx = x - 1; nx <= x + 1; ++nx)
             for (int ny = y - 1; ny <= y + 1; ++ny)
                 for (int nz = z - 1; nz <= z + 1; ++nz) {
-                    if (core_column_cell(nx, ny, nz)) continue;  // the core holds
+                    if (core_column_cell(nx, ny, nz) || core_tent_cell(nx, ny, nz))
+                        continue;  // the core holds, and so does its tent
                     map.destroy_point(nx, ny, nz, &removed);
                 }
         touched(removed, false);
@@ -3680,6 +3769,10 @@ struct Server::Impl {
                 system_chat("The core cannot be torn down.", p.id);
                 return;
             }
+            if (core_tent_cell(x, y, z)) {
+                system_chat("The core's tent cannot be torn down.", p.id);
+                return;
+            }
             if (p.tool == kToolSpade && !within(kMaxDigDistance)) return;
             std::vector<Cell> removed;
             if (value == kDestroyBlock) {
@@ -3931,7 +4024,11 @@ bool Server::start(std::string& err) {
         // default stays the settings' fixed quarters - its tests read
         // them deterministically.)
         s.horde_cfg.roam_spawns = true;
-        s.nearest_land(s.horde_cfg.core_x, s.horde_cfg.core_y);
+        // The map that named the core's floor is trusted as it stands:
+        // the walk to land would drag the core of a room in the hill
+        // out to the surface, the one thing its z exists to prevent.
+        if (s.map_core_z < 1 || s.map_core_z > 63)
+            s.nearest_land(s.horde_cfg.core_x, s.horde_cfg.core_y);
         for (int k = 0; k < horde::Config::kSpawnSites; ++k) {
             int x = s.horde_cfg.spawn_x[k], y = s.horde_cfg.spawn_y[k];
             s.nearest_land(x, y);

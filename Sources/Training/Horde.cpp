@@ -247,19 +247,83 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
     // sits steps above the plain, and no walk starts there. The cells beside
     // it are seeded alongside it, so the field still spreads from the
     // neighbourhood the horde only has to reach to bite.
-    auto seed = [&](int x, int y, int d) {
+    auto seed_one = [&](int x, int y, int k, int d) {
         if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return;
         if (x == block_x && y == block_y) return;
-        for (int k = 0; k < surf_count(x, y); ++k) {
-            const size_t s = state(x, y, k);
-            if (dist[s] == kUnreachable) {
-                dist[s] = d;
-                open.emplace(d, static_cast<int32_t>(s));
-            }
+        const size_t s = state(x, y, k);
+        if (dist[s] == kUnreachable) {
+            dist[s] = d;
+            open.emplace(d, static_cast<int32_t>(s));
         }
     };
-    seed(cx, cy, 0);
-    for (int k = 0; k < 4; ++k) seed(cx + kDx[k], cy + kDy[k], 1);
+    auto seed = [&](int x, int y, int d) {
+        for (int k = 0; k < surf_count(x, y); ++k) seed_one(x, y, k, d);
+    };
+    // The core's own floors, the ones the walk starts on: every surface
+    // of its column, as it always was - save when the host named the
+    // marker's top layer: then only the floors at that level do. A cave
+    // seals its core under the hill, and the hill's own top is no place
+    // at the core: whoever stands on it is a world of rock away from
+    // the bite, and no distance may call that spot zero, or the whole
+    // hilltop gathers at one that never opens.
+    const int core_n = surf_count(cx, cy);
+    int core_z[kSurfMax];
+    int nq = 0;
+    for (int k = 0; k < core_n; ++k) {
+        const int z = surf_z_[cell_index(cx, cy) * kSurfMax + k];
+        if (cfg_.core_top_z >= 0 && std::abs(z - cfg_.core_top_z) > 1)
+            continue;
+        core_z[nq++] = z;
+        seed_one(cx, cy, k, 0);
+    }
+    // The cells beside it are seeded alongside it - but only on the
+    // floors that truly stand beside the core: a step from one of its
+    // own floors, or a fall off it into honest air. The flat world that
+    // has no word for the marker's level keeps the blanket it always
+    // had, every storey of its four neighbours; a cave keeps the
+    // hilltop above the room OFF the field, or the hill the core hides
+    // under would sit one step from it on paper, and the dead would
+    // walk its roof as though they were home.
+    if (cfg_.core_top_z < 0) {
+        for (int k = 0; k < 4; ++k) seed(cx + kDx[k], cy + kDy[k], 1);
+    } else if (nq > 0) {
+        for (int k = 0; k < 4; ++k) {
+            const int nx = cx + kDx[k], ny = cy + kDy[k];
+            if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
+            if (nx == block_x && ny == block_y) continue;
+            for (int m = 0; m < surf_count(nx, ny); ++m) {
+                const int nz = surf_z_[cell_index(nx, ny) * kSurfMax + m];
+                bool beside = false;
+                for (int j = 0; j < nq && !beside; ++j) {
+                    const int dz = nz - core_z[j];
+                    if (dz >= -Config::kWalkClimb && dz <= Config::kFall)
+                        beside = true;
+                }
+                if (beside) seed_one(nx, ny, m, 1);
+            }
+        }
+    } else {
+        // The marker buried past reach: no floor of its column stands
+        // anywhere the dead could stand. The seeds fall to the room
+        // beside it instead - the deepest floor of each neighbour, the
+        // ring the horde bites from - and the hill above stays what it
+        // is: ground, nowhere near the core it hides.
+        for (int k = 0; k < 4; ++k) {
+            const int nx = cx + kDx[k], ny = cy + kDy[k];
+            if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
+            if (nx == block_x && ny == block_y) continue;
+            const int n = surf_count(nx, ny);
+            int deep = -1, deep_z = -1;
+            for (int m = 0; m < n; ++m) {
+                const int nz = surf_z_[cell_index(nx, ny) * kSurfMax + m];
+                if (deep < 0 || nz > deep_z) {
+                    deep_z = nz;
+                    deep = m;
+                }
+            }
+            if (deep >= 0) seed_one(nx, ny, deep, 1);
+        }
+    }
     while (!open.empty()) {
         const QE top = open.top();
         open.pop();
@@ -386,9 +450,10 @@ void Horde::recompute() {
 
 void Horde::on_map_edited() { field_dirty_ = true; }
 
-void Horde::move_core(int x, int y) {
+void Horde::move_core(int x, int y, int top_z) {
     cfg_.core_x = x;
     cfg_.core_y = y;
+    cfg_.core_top_z = top_z;
     field_dirty_ = true;
 }
 
@@ -559,9 +624,10 @@ bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty) {
 }
 
 // Whether the spade's way is worth the walker's while, read at its feet:
-// the legs' own walk has to be silent there - no way home the legs can
-// take - or the dig walk's way home must be shorter by at least
-// kDigShortcut of the legs' own steps. The dig walk's crossings are
+// the legs' own walk has to be silent on the floor the feet stand on - no
+// way home the legs can take from there - or the dig walk's way home must
+// be shorter by at least kDigShortcut of the legs' own steps. The dig
+// walk's crossings are
 // already priced dear; this is the second gate, the one that keeps the
 // spade holstered while a walk of legs gets there nearly as soon.
 bool Horde::dig_worth(int x, int y, int z) const {
@@ -570,8 +636,10 @@ bool Horde::dig_worth(int x, int y, int z) const {
     if (kd < 0) return false;
     const int dg = dig_dist_[cell_index(x, y) * kSurfMax + kd];
     if (dg < 0) return false;
-    const int kl = near_state(x, y, z);
-    const int leg = kl < 0 ? kUnreachable : dist_[cell_index(x, y) * kSurfMax + kl];
+    // The legs read on the same floor the spade is asked about: another
+    // storey of the same column is another world, and the road under a
+    // sealed roof is no shorter for the body standing on that roof.
+    const int leg = dist_[cell_index(x, y) * kSurfMax + kd];
     return leg < 0 || dg + Config::kDigShortcut <= leg;
 }
 

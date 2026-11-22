@@ -67,6 +67,15 @@ enum class Phase {
 struct Config {
     // The cell the zombies walk to.
     int core_x = 256, core_y = 256;
+    // The layer of the marker's own top block, as its host reads it of
+    // the ground the core stands on; -1 when the host has no word for
+    // it (the tests' flat world keeps the old blanket seeding). The
+    // walk only starts on the floors this names: every other surface
+    // of the core's own column - the hilltop of a cave that sealed its
+    // core under the map - owns no distance and starts no walk, for
+    // the dead that stand on it are nowhere near the core, whatever
+    // the column under their feet keeps.
+    int core_top_z = -1;
     // The spawn points the dead come from: the centre of each one's reach.
     // Ten of them now - the map's four corners, and six more spread along
     // its edges - so the later waves can open more fronts than the corners
@@ -268,9 +277,10 @@ public:
     // The map changed (built or destroyed): the field follows, debounced.
     void on_map_edited();
     // The core moved to a cell already standing there (its column built
-    // and aired by its own word): the field walks the walkers to the new
-    // place at its own next reading, the same debounce an edit has.
-    void move_core(int x, int y);
+    // and aired by its own word): top_z is the layer of its new top
+    // block, and the field walks the walkers to the new place at its
+    // own next reading, the same debounce an edit has.
+    void move_core(int x, int y, int top_z);
 
     // Where a zombie at cell (x, y) should step: the neighbour of the lowest
     // field distance, which heads to the core around obstacles. False when
@@ -303,11 +313,15 @@ public:
     // wall got its crowd. Consulted only when dig_worth says so.
     bool next_dig_step(int x, int y, int z, int& tx, int& ty, int& tz);
     // Whether the spade's way is worth the walker's while, read at its
-    // feet: true when the legs' walk is silent there (no way home the
-    // legs can take), or when the dig walk's way home is shorter by at
-    // least kDigShortcut steps - the shortcut priced dear as it is, only
-    // an important one is taken. False when the dig is off or its walk
-    // has no way home either.
+    // feet: true when the legs' walk is silent on the floor the feet
+    // stand on (no way home the legs can take from THERE), or when the
+    // dig walk's way home from that same floor is shorter by at least
+    // kDigShortcut steps - the shortcut priced dear as it is, only an
+    // important one is taken. The legs are asked on the same storey the
+    // spade is: another floor of the same column is another world, and
+    // the road under a sealed roof is no shorter for the body standing
+    // on that roof. False when the dig is off or its walk has no way
+    // home either.
     bool dig_worth(int x, int y, int z) const;
     // Whether a cell is within `cells` of the core in the plan - the
     // height is no part of it; the teeth add the column's level, the

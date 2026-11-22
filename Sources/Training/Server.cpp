@@ -845,6 +845,7 @@ struct Server::Impl {
         for (int k = 1; k <= core_height; ++k)
             map.set(x, y, core_ground_z - k, 0x7F3080FFu);
         core_top_z = core_ground_z - core_height;
+        horde_cfg.core_top_z = core_top_z;
     }
 
     // The column of the old column: whatever of it stands is taken down and
@@ -2125,7 +2126,7 @@ struct Server::Impl {
         horde_cfg.core_y = y;
         build_core_column(foot_z);
         air_core_column();
-        horde->move_core(x, y);
+        horde->move_core(x, y, core_top_z);
         core_resend_next = 0.0;
         core_state_send();
         system_chat("The core stands at " + std::to_string(x) + ", " +
@@ -2214,7 +2215,11 @@ struct Server::Impl {
     // the way over. Only the pack's head digs: one spade a crossing, one
     // breach for the line to pour through; a follower steer-led by the
     // dig walk walks and drops as advised, but waits at the wall for the
-    // breach its head opens. False when the licence is off, the walker
+    // breach its head opens. And what holds for a wall holds for a
+    // ceiling: a drop the walk promises through rock that was never
+    // opened is not walked but carved, its first solid voxel off, one a
+    // stroke, until the fall stands in honest air and the body takes it.
+    // False when the licence is off, the walker
     // is aloft, the dig walk is silent, or the legs' way is nearly as
     // soon; the walker is left to the legs' own answers.
     bool dig_lead(Player& p, bool leg_led) {
@@ -2232,16 +2237,30 @@ struct Server::Impl {
         // The crossing against the jump: a climb the legs cannot make is
         // the column to be taken down, from its own top - the crossing's
         // surface voxel, the one the walk prices its block at. The core's
-        // column is never touched, whatever its height.
+        // column is never touched, whatever its height - and the drop the
+        // walk promises through a ceiling that was never opened is the
+        // spade's work the same way: the first solid voxel in the fall's
+        // way comes off, top down, one a stroke, until the drop is
+        // honest air and the body walks it. The shaft opens beside the
+        // core, above the rock of its own column, and the core's own
+        // blocks are the one thing never touched.
         const int climb = tz < fz ? fz - tz : 0;
+        int spade_z = -1;
         if (climb > horde::Config::kWalkClimb) {
+            spade_z = tz;
+        } else if (tz > fz) {
+            for (int z = fz; z < tz; ++z) {
+                if (map.solid(tx, ty, z)) { spade_z = z; break; }
+            }
+        }
+        if (spade_z >= 0) {
             p.input.mf = false;   // it works standing, not pressed at its wall
             if (p.ahead_id >= 0) return true;   // the line waits on its head
             if (world_time < p.spade_at + horde_cfg.dig_seconds) return true;
-            if (!map.solid(tx, ty, tz)) return true;   // the field has not caught up yet
-            if (core_column_cell(tx, ty, tz)) return true;
+            if (!map.solid(tx, ty, spade_z)) return true;   // the field has not caught up yet
+            if (core_column_cell(tx, ty, spade_z)) return true;
             std::vector<Cell> removed;
-            map.destroy_point(tx, ty, tz, &removed);
+            map.destroy_point(tx, ty, spade_z, &removed);
             touched(removed, false);
             ByteWriter bw;
             bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
@@ -2249,13 +2268,13 @@ struct Server::Impl {
             bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
             bw.write_i32(tx);
             bw.write_i32(ty);
-            bw.write_i32(tz);
+            bw.write_i32(spade_z);
             broadcast(bw, true);
             p.spade_at = world_time;
             show_swing(p, horde_cfg.dig_seconds);
             return true;
         }
-        // A step, or a drop: walked, not spaded.
+        // A step, or a drop of honest air: walked, not spaded.
         p.input.mf = true;
         return true;
     }

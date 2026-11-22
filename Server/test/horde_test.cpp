@@ -415,13 +415,16 @@ void test_route() {
     }
     // Nothing anywhere: a core sealed away and every corner far beyond the
     // field's reach - no anchor for anyone, and the wave stands down
-    // instead of clearing itself in silence.
+    // instead of clearing itself in silence. The spade is the problem's
+    // own: with the licence on, the sealed town anchors on the spade's
+    // frontier instead, so this round reads the legs alone.
     {
         SolidMap map;
         plain(map);
         ring(map, Ring{100, 100, 6, -1, -1});
         horde::Config cfg = horde_cfg(100, 100);
         cfg.spawn_x[0] = 460; cfg.spawn_y[0] = 460;  // the near corner gone too
+        cfg.dig = false;  // the licence off: no spade, no frontier
         horde::Horde h(map, cfg);
         h.restart(0.0);
         h.tick(10.5);
@@ -459,7 +462,9 @@ void test_route() {
     // the cliff walls both ways and keeps the field on the mesa's own top.
     // The dead still fear no landing, but the plan never pours them off
     // one - and no corner's reach holds a cell of the walk, so the wave
-    // stands down until the map itself is opened.
+    // stands down until the map itself is opened. The legs are the only
+    // walker in this round: with the spade licensed, the mesa's cliff is
+    // climbable at a price and the wave would anchor past it.
     {
         SolidMap map;
         plain(map);
@@ -467,7 +472,9 @@ void test_route() {
             for (int x = 255; x <= 257; ++x)
                 for (int k = 1; k <= 20; ++k)
                     map.set_block(x, y, GROUND_TOP - k, true);
-        horde::Horde h(map, horde_cfg(256, 256));
+        horde::Config cfg = horde_cfg(256, 256);
+        cfg.dig = false;  // the licence off: the cliff holds
+        horde::Horde h(map, cfg);
         check(h.distance(258, 256) < 0,
               "a cliff of twenty is a wall both ways down");
         check(h.distance(256, 256) == 0 && h.distance(255, 256) == 1,
@@ -572,6 +579,66 @@ void test_dig() {
               "the licence off: the sealed town raises nothing");
         check(off.wave_fronts(1) == 0,
               "the licence off: no front is named, nothing is painted");
+    }
+    // The buried core: sealed in a room dug out of a solid mass under
+    // the plain, its ceiling closed. The blank world without the marker
+    // seeds the whole column for its own, and the roof above the core
+    // reads distance zero - the dead gather on it and nothing ever
+    // opens. The marker names the core's top layer, and only the floors
+    // at that level, and the ones that truly stand beside them, hold
+    // the seed: the roof is a world of rock away, silent to the legs,
+    // and the spade's field hands the gathered a crossing down through
+    // it - the core's own column, named at the marker's level, the
+    // fall across sealed rock opened by the spade top down, a voxel a
+    // stroke. Once the shaft stands open the advice keeps its name and
+    // the fall is honest air the walker takes - and the buried room
+    // raises its wave all the same, anchored on the spade's frontier,
+    // the plain above.
+    {
+        SolidMap map;
+        plain(map);
+        for (int y = 253; y <= 259; ++y)
+            for (int x = 253; x <= 259; ++x)
+                for (int z = 34; z <= 39; ++z)
+                    map.set_block(x, y, z, true);  // the mass the room hides in
+        for (int y = 255; y <= 257; ++y)
+            for (int x = 255; x <= 257; ++x)
+                for (int z = 36; z <= 38; ++z)
+                    map.set_block(x, y, z, false);  // the room, its floor at 39
+        map.set_block(256, 256, 36, false);  // the headroom over the marker
+        map.set_block(256, 256, 37, true);   // the core's own blocks kept:
+        map.set_block(256, 256, 38, true);   // the marker names its top, 37
+        horde::Config cfg = horde_cfg(256, 256);
+        cfg.core_top_z = 37;
+        horde::Horde h(map, cfg);
+        check(h.distance(270, 256, GROUND_TOP) < 0,
+              "a named marker buried: the ground above is no place at the core");
+        check(h.dig_worth(255, 256, GROUND_TOP),
+              "the roof above a buried core: the legs are silent, the spade is worth it");
+        int tx = -1, ty = -1, tz = -1;
+        check(h.next_dig_step(255, 256, GROUND_TOP, tx, ty, tz) &&
+                  tx == 256 && ty == 256 && tz == 37,
+              "the advice on the roof names the core's own column and level");
+        check(map.solid(tx, ty, GROUND_TOP),
+              "the promised fall crosses sealed rock: the spade opens it");
+        // The shaft worked the way the spade works it, top down through
+        // the ceiling: the crossing stands in honest air now, and the
+        // advice keeps its name.
+        for (int z = GROUND_TOP; z <= 36; ++z)
+            map.set_block(256, 256, z, false);
+        h.on_map_edited();
+        h.tick(2.0);
+        check(h.next_dig_step(255, 256, GROUND_TOP, tx, ty, tz) &&
+                  tx == 256 && ty == 256 && tz == 37,
+              "through open air the advice keeps naming the room below");
+        // The buried room raises its wave: anchored on the spade's own
+        // frontier, the plain above.
+        h.restart(0.0);
+        h.tick(10.5);
+        check(h.placed() == 20, "the buried room still stands its wave up");
+        std::vector<horde::SpawnAt> due;
+        check(h.take_due(due, 100.0) && h.zombies_up() == 20,
+              "the buried wave streams from the plain");
     }
 }
 

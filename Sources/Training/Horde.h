@@ -49,6 +49,7 @@
 // treetops above it, so the way in can be watched while it proves itself.
 #include <algorithm>
 #include <cstdint>
+#include <random>
 #include <vector>
 
 class SolidMap;
@@ -77,6 +78,18 @@ struct Config {
     int spawn_y[kSpawnSites] = {32, 32, 479, 479, 32, 32, 479, 479, 255, 255};
     // The spawn box width of earlier days; the clearing is five by five now.
     int spawn_size = 12;
+    // Whether each wave deals its fronts a new asking round the town
+    // (see Horde::roam): a front keeps its colour and moves its ground
+    // between the waves, and the askings spread evenly yet anew around
+    // the town every wave. Off - the tests' deterministic reading - the
+    // asked-for centres stand as named above, wave after wave.
+    bool roam_spawns = false;
+    // The roaming asking's own band: it keeps this far off the map's own
+    // edge, and may be drawn this far back along its ray toward the
+    // town, so the asking sits somewhere in the ring around the town
+    // rather than pinned to the border itself.
+    static constexpr int kRoamMargin = 16;
+    static constexpr int kRoamPull = 64;
     double prep_seconds = 20.0;
     double intermission_seconds = 12.0;
     // Zombies trickle out, not all at once - though a wave that stands
@@ -369,6 +382,13 @@ private:
     // asks it before the wave stands up; tick keeps it fresh through the
     // waiting phases, wherever the field under it was recomputed.
     void scout();
+    // The asked-for centres, dealt again every wave when roam_spawns is
+    // on: the corners' quarters shuffle round the compass and each
+    // centre is drawn inside its own quarter's ring band around the
+    // town, so the wave's fronts spread round it wherever the terrain
+    // then lets their ways run. Informs the scout's reading and the
+    // veto's (both read roam_x_/roam_y_).
+    void roam();
     void begin_wave(double now);
     void place_wave(double now);
 
@@ -405,6 +425,13 @@ private:
     // first), and how many zombies that wave truly stood up.
     int rank_corner_[Config::kSpawnSites] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
     int placed_ = 0;
+    // The asked-for centres the scout sweeps round and the veto reads:
+    // the settings' own until a wave roams them (see roam()). The
+    // deterministic tests get the settings' quarters; the game deals
+    // its own, a wave at a time.
+    int roam_x_[Config::kSpawnSites] = {};
+    int roam_y_[Config::kSpawnSites] = {};
+    std::mt19937 rng_{std::random_device{}()};
 };
 
 }  // namespace horde

@@ -41,6 +41,13 @@ size_t cell_index(int x, int y) {
 // computed right away - it is asked for before the first tick.
 Horde::Horde(const SolidMap& map, const Config& cfg) : map_(map), cfg_(cfg) {
     core_hp_ = cfg_.core_hp;
+    // The asked-for centres begin as the settings name them (the tests'
+    // fixed quarters); roam() redraws them a wave at a time when the
+    // config asks for it.
+    for (int c = 0; c < Config::kSpawnSites; ++c) {
+        roam_x_[c] = cfg_.spawn_x[c];
+        roam_y_[c] = cfg_.spawn_y[c];
+    }
     recompute();
 }
 
@@ -342,7 +349,7 @@ bool Horde::reach_spawn(const std::vector<int32_t>& dist) const {
         return false;
     };
     for (int c = 0; c < Config::kSpawnSites; ++c) {
-        const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
+        const int cx = roam_x_[c], cy = roam_y_[c];
         for (int r = 0; r < Config::kSpawnSearch; ++r) {
             for (int y = cy - r; y <= cy + r; ++y) {
                 if (y == cy - r || y == cy + r) {
@@ -801,6 +808,59 @@ bool Horde::can_build(int x, int y, int z) {
 // piles on the anchor's own floor, whatever room its neighbours give:
 // players pass through players in this game, and the crowd's push
 // splits the pile apart as it walks. The anchors are kept.
+// The asking dealt again, a wave at a time: the asked-for centre of
+// every corner is redrawn where each wave stands up, so a front keeps
+// its colour but not its ground - the orange way in moves between the
+// waves, and no colour camps one quarter of the world the whole game
+// long. The spread round the town stays even all the same: the compass
+// is cut in as many sectors as there are corners, the sectors are dealt
+// to the corners shuffled, and a corner's centre is drawn inside its
+// own sector alone, so the wave's fronts - the ranked first of the dealt
+// hands - stand wide apart wherever the terrain then lets their ways
+// run. The centre only points; the anchor itself is still the walk's
+// own frontier within the centre's reach (scout()), and the veto reads
+// the same centres (reach_spawn), so a wall that would seal the ways
+// this wave asked for is still refused, wherever the asking moved.
+void Horde::roam() {
+    std::uniform_real_distribution<double> bit(0.0, 1.0);
+    // The sectors, dealt shuffled: corner c holds sector deal[c].
+    int deal[Config::kSpawnSites];
+    for (int c = 0; c < Config::kSpawnSites; ++c) deal[c] = c;
+    std::shuffle(deal, deal + Config::kSpawnSites, rng_);
+    const double cx = cfg_.core_x, cy = cfg_.core_y;
+    const double m = Config::kRoamMargin;
+    for (int c = 0; c < Config::kSpawnSites; ++c) {
+        // The corner's own sector, pointed anywhere within it but never
+        // across its borders into the next.
+        const double sector = (deal[c] + 0.15 + 0.70 * bit(rng_)) *
+                              6.283185307179586 / Config::kSpawnSites;
+        const double dx = std::cos(sector), dy = std::sin(sector);
+        // How far the ray runs before it steps outside the border band;
+        // a core at the band's own brink still gets a place to ask.
+        double run = 1.0e9;
+        if (dx > 1.0e-6) run = (std::min)(run, (kMapW - m - cx) / dx);
+        else if (dx < -1.0e-6) run = (std::min)(run, (m - cx) / dx);
+        if (dy > 1.0e-6) run = (std::min)(run, (kMapH - m - cy) / dy);
+        else if (dy < -1.0e-6) run = (std::min)(run, (m - cy) / dy);
+        if (run < 24.0) run = 24.0;
+        // A pull back along the ray, drawn: the asking sits somewhere in
+        // the ring around the town rather than pinned to the band itself.
+        double t = run - bit(rng_) * Config::kRoamPull;
+        if (t < 24.0) t = 24.0;
+        int x = static_cast<int>(cx + dx * t);
+        int y = static_cast<int>(cy + dy * t);
+        if (x < static_cast<int>(m)) x = static_cast<int>(m);
+        if (y < static_cast<int>(m)) y = static_cast<int>(m);
+        if (x > kMapW - 1 - static_cast<int>(m)) x = kMapW - 1 - static_cast<int>(m);
+        if (y > kMapH - 1 - static_cast<int>(m)) y = kMapH - 1 - static_cast<int>(m);
+        roam_x_[c] = x;
+        roam_y_[c] = y;
+    }
+    // A new asking: the reading that stood on the old centres is spent,
+    // and the scout - this wave's own, in place_wave - reads it fresh.
+    scouted_ = false;
+}
+
 void Horde::scout() {
     if (field_dirty_) recompute();
     // The anchors, every spawn point: the far end of the walk, the frontier.
@@ -848,7 +908,7 @@ void Horde::scout() {
         for (int c = 0; c < Config::kSpawnSites; ++c) {
             anchor_x_[c] = -1;
             anchor_y_[c] = 0;
-            const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
+            const int cx = roam_x_[c], cy = roam_y_[c];
             int best_d = -1;
             for (int r = 0; r < Config::kSpawnSearch; ++r) {
                 rungs_x.clear();
@@ -943,6 +1003,10 @@ void Horde::scout() {
 // floors - the leader leads, the rest hold at its heel - and the anchors
 // are the scout's, so the host paints the route the wave truly takes.
 void Horde::place_wave(double now) {
+    // This wave's own asking, dealt anew (roam_spawns): the fronts keep
+    // their colours and move their quarters, and the scout below then
+    // reads them fresh.
+    if (cfg_.roam_spawns) roam();
     if (!scouted_) scout();   // the reading only moves with the field
     const int n = cfg_.wave_zombies(wave_);
     const int nc = cfg_.wave_points(wave_);

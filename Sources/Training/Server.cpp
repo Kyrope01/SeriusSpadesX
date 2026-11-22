@@ -3013,6 +3013,12 @@ bool Server::start(std::string& err) {
         // each is walked in to the nearest land.
         s.horde_cfg.core_x = s.cfg.core_x;
         s.horde_cfg.core_y = s.cfg.core_y;
+        // The waves deal their own quarters this side: every wave redraws
+        // the asked-for centres round the town, spread even and shuffled,
+        // so no colour keeps the same corner game long. (The Horde's own
+        // default stays the settings' fixed quarters - its tests read
+        // them deterministically.)
+        s.horde_cfg.roam_spawns = true;
         s.nearest_land(s.horde_cfg.core_x, s.horde_cfg.core_y);
         for (int k = 0; k < horde::Config::kSpawnSites; ++k) {
             int x = s.horde_cfg.spawn_x[k], y = s.horde_cfg.spawn_y[k];

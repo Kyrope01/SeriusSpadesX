@@ -575,6 +575,51 @@ void test_dig() {
     }
 }
 
+// The dealt asking: with roam_spawns the waves redraw their asked-for
+// centres round the town, spread in shuffled compass sectors - and the
+// reading keeps its own rules wherever the asking moved: the anchor is
+// the walk's frontier within the asking's reach, far from the core, and
+// the wave still rises on the ground it was dealt. The Horde's default
+// stays off, so the rounds above read their fixed corners as ever.
+void test_roam() {
+    std::printf("[roam] the quarters dealt each wave, spread round the town\n");
+    SolidMap map;
+    plain(map);
+    horde::Config cfg = horde_cfg(256, 256);
+    cfg.roam_spawns = true;
+    horde::Horde h(map, cfg);
+    h.restart(0.0);
+    h.tick(10.5);
+    check(h.phase() == horde::Phase::Wave && h.wave() == 1,
+          "the dealt wave begins on time");
+    int ax = -1, ay = -1;
+    check(h.corner_anchor(h.ranked_corner(0), ax, ay),
+          "the dealt asking still anchors a way in");
+    check(ax >= 0 && ay >= 0 && ax < SolidMap::SIZE_X && ay < SolidMap::SIZE_Y,
+          "the dealt anchor stands on the map");
+    check(h.distance(ax, ay) > 100,
+          "the dealt way in is far from the core, whatever quarter drew it");
+    std::vector<horde::SpawnAt> due;
+    h.take_due(due, 100.0);
+    bool on_ground = true;
+    for (const horde::SpawnAt& s : due)
+        if (s.z != GROUND_TOP) on_ground = false;
+    check(!due.empty() && on_ground,
+          "the wave rises on the ground it was dealt");
+    for (size_t i = 0; i < due.size(); ++i) h.on_zombie_killed();
+    check(h.wave_cleared(), "the dealt wave clears like any other");
+    h.tick(100.5);
+    check(h.phase() == horde::Phase::Intermission, "the dealt wave turns");
+    h.tick(106.0);
+    check(h.phase() == horde::Phase::Wave && h.wave() == 2,
+          "wave two comes with a deal of its own");
+    ax = ay = -1;
+    check(h.corner_anchor(h.ranked_corner(0), ax, ay),
+          "wave two's own deal anchors a way in");
+    check(h.distance(ax, ay) > 100,
+          "wave two's way in is far from the core too");
+}
+
 }  // namespace
 
 int main() {
@@ -584,6 +629,7 @@ int main() {
     test_route();
     test_growth();
     test_dig();
+    test_roam();
     if (g_failures == 0) {
         std::printf("horde: all checks passed\n");
         return 0;

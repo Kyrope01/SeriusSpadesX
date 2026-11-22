@@ -11,7 +11,14 @@
 // over the cap and the road through the tunnel, and the walk takes
 // whichever the legs can. One crossing is asked of it: the walk of the
 // legs is reversible - a step of two is a jump, up or down, and anything
-// more is a wall, for they do not dig. The veto asks the same walk the
+// more is a wall, for the legs alone cannot dig. But the dead carry a
+// spade, and beside the legs' walk a second field prices what the spade
+// could cross - a fall of up to kFall, a climb at kDigPenalty steps a
+// block - consulted only where the legs' reading is silent or its way
+// home saves kDigShortcut steps or more, so a wall is crossed only when
+// going around it is the longer errand, and a sealed town still anchors
+// its waves on the spade's own frontier.
+// The veto asks the same legs' walk the
 // other way round, with the block a player wants
 // held out of it, and the route the host paints is read off it cell by
 // cell. The waves walk in from the far end of the walk, the borderlands
@@ -496,6 +503,68 @@ void test_route() {
     }
 }
 
+// The spade's own walk: a second field priced dear, consulted only where
+// the legs' reading fails or its shortcut is worth the price, and a
+// sealed town that still anchors, raises and traces its waves on it.
+void test_dig() {
+    std::printf("[dig] the spade's walk, priced and consulted\n");
+    // The open plain: the dig way home is the legs' own way home, saving
+    // nothing, and the spade stays in its belt.
+    {
+        SolidMap map;
+        plain(map);
+        horde::Horde h(map, horde_cfg(256, 256));
+        check(h.distance(210, 210) >= 0, "the plain's walk runs free");
+        check(!h.dig_worth(210, 210, GROUND_TOP),
+              "no shortcut on the plain: the spade stays holstered");
+    }
+    // The sealed ring: the legs are shut out, the spade's way crosses its
+    // wall, the wave still stands up, and the advice at the wall's foot
+    // names the crossing's own top - a climb of three, the signal to dig.
+    {
+        SolidMap map;
+        plain(map);
+        ring(map, Ring{256, 256, 6, -1, -1});
+        horde::Horde h(map, horde_cfg(256, 256));
+        check(h.distance(270, 256) < 0, "the legs' walk is shut out");
+        check(h.dig_worth(270, 256, GROUND_TOP),
+              "with the legs silent, the spade is worth it");
+        int tx = 0, ty = 0, tz = 0;
+        check(h.next_dig_step(270, 256, GROUND_TOP, tx, ty, tz) &&
+                  (tx != 270 || ty != 256) && tz == GROUND_TOP,
+              "mid-field, the dig advice walks the plain toward the wall");
+        check(h.next_dig_step(263, 256, GROUND_TOP, tx, ty, tz) &&
+                  tx == 262 && ty == 256 && tz == WALL_TOP,
+              "at the wall's foot it names the crossing's own top");
+        // The sealed town still catches its waves: the anchors stand on
+        // the spade's own frontier.
+        h.restart(0.0);
+        h.tick(10.5);
+        check(h.phase() == horde::Phase::Wave && h.placed() > 0,
+              "a walled town still stands its wave up");
+        int ax = -1, ay = -1;
+        check(h.corner_anchor(0, ax, ay) && ax >= 0 && ay >= 0,
+              "the sealed town's wave anchors at the border");
+        std::vector<horde::RouteCell> cells;
+        check(h.trace_dig(ax, ay, cells) && !cells.empty(),
+              "the spade's route traces to the core");
+        bool over_the_wall = false;
+        for (const horde::RouteCell& rc : cells)
+            if (rc.z < GROUND_TOP) over_the_wall = true;
+        check(over_the_wall, "the traced way crosses over the wall's top");
+        // The licence off: the same sealed town raises nothing.
+        horde::Config off_cfg = horde_cfg(256, 256);
+        off_cfg.dig = false;
+        horde::Horde off(map, off_cfg);
+        check(!off.dig_worth(270, 256, GROUND_TOP),
+              "the licence off: worth nothing");
+        off.restart(0.0);
+        off.tick(10.5);
+        check(off.phase() == horde::Phase::Wave && off.placed() == 0,
+              "the licence off: the sealed town raises nothing");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -504,6 +573,7 @@ int main() {
     test_waves();
     test_route();
     test_growth();
+    test_dig();
     if (g_failures == 0) {
         std::printf("horde: all checks passed\n");
         return 0;

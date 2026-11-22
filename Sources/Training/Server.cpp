@@ -408,8 +408,8 @@ struct Player {
     // Its pack: the zombie it follows in single file, or -1 when it reads
     // the field itself - the pack's leader, or the last of a broken line.
     int ahead_id = -1;
-    // When it stopped making progress: a stuck one jumps for a way out; the
-    // spade is out of its hands while the dead walk.
+    // When it stopped making progress: a stuck one jumps for a way out;
+    // the spade comes out only where the dig walk says it pays.
     double stuck_at = -1.0;
     // The walk's distance read at its feet, kept window by window: the
     // moving-stuck's tell. A leader that has not stood on a lower floor
@@ -420,6 +420,11 @@ struct Player {
     int stall_windows = 0;
     // When it last flung itself at the step it could not climb.
     double pounce_at = -1e9;
+    // When its spade last took a block off what it faces: the pace of the
+    // dig, one voxel a dig_seconds, and the tell that tells the unstick
+    // its windows apart - a digger stands by design, and the hop and the
+    // fling would only spoil its work.
+    double spade_at = -1e9;
     // Its heel prints: the places its feet were set, half a pace apart,
     // kept in a ring in the order they were walked - the pack's memory
     // of the way it holds. The line does not follow the body in front;
@@ -1274,6 +1279,65 @@ struct Server::Impl {
         return chosen;
     }
 
+    // The spade's lead: the dig walk's advice, for a walker the legs'
+    // advice has nothing for, or nothing worth its while - `leg_led` says
+    // which question this is. The crossing the dig walk hands back may
+    // be a step the legs make after all, a drop walked straight off (the
+    // dead fear no landing), or a climb beyond the jump: and a climb is
+    // the spade's own work. The walker plants itself facing the column
+    // it cannot take and empties the crossing's top off it, one voxel a
+    // dig_seconds - the pace the walk's own price of it says - until what
+    // is left is a jump the hop and the fling can clear, and the field,
+    // freshly recomputed around the lowered wall, hands the whole pack
+    // the way over. Only the pack's head digs: one spade a crossing, one
+    // breach for the line to pour through; a follower steer-led by the
+    // dig walk walks and drops as advised, but waits at the wall for the
+    // breach its head opens. False when the licence is off, the walker
+    // is aloft, the dig walk is silent, or the legs' way is nearly as
+    // soon; the walker is left to the legs' own answers.
+    bool dig_lead(Player& p, bool leg_led) {
+        if (!horde_mode() || !horde_cfg.dig || p.body.airborne) return false;
+        const int cx = static_cast<int>(std::floor(p.body.pos.x));
+        const int cy = static_cast<int>(std::floor(p.body.pos.y));
+        const int fz = static_cast<int>(std::floor(p.body.pos.z + 2.25f));
+        if (leg_led && !horde->dig_worth(cx, cy, fz)) return false;
+        int tx = cx, ty = cy, tz = fz;
+        if (!horde->next_dig_step(cx, cy, fz, tx, ty, tz)) return false;
+        const float dx = static_cast<float>(tx) + 0.5f - p.body.pos.x;
+        const float dy = static_cast<float>(ty) + 0.5f - p.body.pos.y;
+        const float dl = std::sqrt(dx * dx + dy * dy);
+        if (dl > 1e-3f) p.body.ori = Vec3{dx / dl, dy / dl, 0.0f};
+        // The crossing against the jump: a climb the legs cannot make is
+        // the column to be taken down, from its own top - the crossing's
+        // surface voxel, the one the walk prices its block at. The core's
+        // column is never touched, whatever its height.
+        const int climb = tz < fz ? fz - tz : 0;
+        if (climb > horde::Config::kWalkClimb) {
+            p.input.mf = false;   // it works standing, not pressed at its wall
+            if (p.ahead_id >= 0) return true;   // the line waits on its head
+            if (world_time < p.spade_at + horde_cfg.dig_seconds) return true;
+            if (!map.solid(tx, ty, tz)) return true;   // the field has not caught up yet
+            if (core_column_cell(tx, ty, tz)) return true;
+            std::vector<Cell> removed;
+            map.destroy_point(tx, ty, tz, &removed);
+            touched(removed, false);
+            ByteWriter bw;
+            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+            bw.write_u8(static_cast<uint8_t>(p.id));
+            bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
+            bw.write_i32(tx);
+            bw.write_i32(ty);
+            bw.write_i32(tz);
+            broadcast(bw, true);
+            p.spade_at = world_time;
+            show_swing(p, horde_cfg.dig_seconds);
+            return true;
+        }
+        // A step, or a drop: walked, not spaded.
+        p.input.mf = true;
+        return true;
+    }
+
     // A zombie's mind: its pack walks one path - it holds at the heel of the
     // zombie in front, and the one at the head reads the field, towards the
     // core. The field is the walk without the spade - stairs, ramps and
@@ -1414,6 +1478,12 @@ struct Server::Impl {
                         p.input.sprint = l > kPackCatch &&
                                         std::fabs(ahead->body.pos.z - p.body.pos.z) < 0.5f;
                     }
+                } else if (dig_lead(p, false)) {
+                    // The field had nothing and the spade's walk had a
+                    // way: the strayed one walks it - and where it
+                    // climbs, it is the pack's head's work to open, not
+                    // a heel's; the heel waits at the wall, held on the
+                    // line of prints it still owes.
                 } else if (print >= 0) {
                     // The field silent - at the core's own cell it always
                     // is - the print is paid rather than the walker stand:
@@ -1452,7 +1522,12 @@ struct Server::Impl {
             const bool led =
                 (!p.body.airborne && horde->next_step(cx, cy, fz, tx, ty)) ||
                 horde->next_step(cx, cy, tx, ty);
-            if (led) {
+            // The spade's second opinion, taken when it pays: the dig
+            // walk's way home is worth the lead when the legs' own is
+            // silent underfoot or longer by more than the spade's price,
+            // and where it says climb, the head digs and the line waits.
+            const bool digs = dig_lead(p, led);
+            if (led && !digs) {
                 // The cell handed back is a square the legs are steered into,
                 // so it is its CENTRE they make for - never its corner. A
                 // corner is the point four cells meet at, a line's width of
@@ -1495,8 +1570,8 @@ struct Server::Impl {
         // The unstick. Progress is measured flat, over the ground it stands
         // on: a hop against a step gains none, so the jump does not wait on
         // where in its bounce the clock samples it. The walk's own answer to
-        // a standstill is the hop; the spade that took walls down is out of
-        // the dead's hands while the walk proves itself. And pacing is a
+        // a standstill is the hop; the spade takes walls down only where
+        // the dig walk says the price is paid in. And pacing is a
         // standstill to the walk - the yo-yo of a leader that crosses to a
         // floor it cannot hold and turns back, over and over, moves a
         // window's worth in every window and so slips the moved measure
@@ -1508,7 +1583,12 @@ struct Server::Impl {
         // vault is the only way out a pacer has. A follower keeps no
         // score: holding a heel's place in the line stirs on the spot by
         // design.
-        if (world_time - p.walk_ref_at >= 0.5) {
+        // The unstick, shelved while the spade works: a digger stands by
+        // design, and its standstill is the pace of its own work - the
+        // windows wait out each stroke's dig_seconds before they score
+        // again, so no hop and no fling spoils the work at the wall.
+        if (world_time - p.walk_ref_at >= 0.5 &&
+            world_time - p.spade_at >= horde_cfg.dig_seconds) {
             const float moved = std::fabs(p.body.pos.x - p.walk_ref.x) +
                                 std::fabs(p.body.pos.y - p.walk_ref.y);
             p.walk_ref = p.body.pos;
@@ -1646,16 +1726,27 @@ struct Server::Impl {
                 head = q.get();
                 head_fd = fd;
             }
-            if (head != nullptr &&
-                horde->trace_route(static_cast<int>(std::floor(head->body.pos.x)),
-                                   static_cast<int>(std::floor(head->body.pos.y)),
-                                   cells) &&
-                !cells.empty())
-                return true;
+            if (head != nullptr) {
+                if (horde->trace_route(static_cast<int>(std::floor(head->body.pos.x)),
+                                       static_cast<int>(std::floor(head->body.pos.y)),
+                                       cells) &&
+                    !cells.empty())
+                    return true;
+                // The sealed way in: the spade's own reading, painted the
+                // same, that the defenders see where the fences will be
+                // gnawed.
+                if (horde_cfg.dig &&
+                    horde->trace_dig(static_cast<int>(std::floor(head->body.pos.x)),
+                                     static_cast<int>(std::floor(head->body.pos.y)),
+                                     cells) &&
+                    !cells.empty())
+                    return true;
+            }
         }
         int ax = 0, ay = 0;
         if (!horde->corner_anchor(horde->ranked_corner(0), ax, ay)) return false;
-        horde->trace_route(ax, ay, cells);
+        if (!horde->trace_route(ax, ay, cells) && horde_cfg.dig)
+            horde->trace_dig(ax, ay, cells);   // the sealed wave's way: over the walls it will take down
         return !cells.empty();
     }
 

@@ -12,10 +12,16 @@
 // distance is lowest, which is a cheapest path around whatever has been
 // built since - a wall's top is one surface, and the floor of a tunnel
 // through it is another, so the walk goes under as well as over, and no
-// gate an arch leaves standing closes a town. For now the dead walk, and do not
-// dig: the walk prices only what legs can cross, and the crossing is
-// reversible - a step of kWalkClimb up or down is a jump, and anything
-// more is a wall. The walk also keeps to the open: a cell hedged by a
+// gate an arch leaves standing closes a town. The dead walk, and they dig
+// when the digging pays: besides the legs' own reversible walk there is a
+// second field, the spade's walk - the falls up to kFall come back into it
+// and a climb beyond the jump is crossed at kDigPenalty steps a block, the
+// time its spade takes that block off - and the spade's way is consulted
+// only where the legs' way is silent or the spade's way home saves more
+// than kDigShortcut of the legs' own steps, so the dead scale a wall only
+// when going around it is the longer errand. The legs' own walk keeps its
+// crossings reversible - a step of kWalkClimb up or down is a jump, and
+// anything more is a wall. The walk also keeps to the open: a cell hedged by a
 // wall on either side of the step is priced dearer than one with a
 // shoulder's room both ways, so a way the legs could hug against a wall -
 // where a walker jams on its corner - is walked only where the map leaves
@@ -33,8 +39,11 @@
 // core?  If not, and there was one before, that block would seal the last
 // way in, and is refused. When the map is already sealed (or the field is
 // out of date), the veto fails open and the tower stands or falls as the
-// player builds it; a sealed world stays sealed until the dead dig again,
-// which is a change kept for later on purpose. The walk the field keeps can
+// player builds it; a sealed world stays sealed to the legs, and the
+// spade's walk is the way through it: the scout anchors a wave on the
+// dig walk's frontier when the legs' walk cannot reach a spawn point at
+// all, so a walled town still catches its waves - at their own pace, the
+// pace of the spade. The walk the field keeps can
 // be read out cell by cell - trace_route, each cell with the surface it was
 // walked on - which the host paints at the walk's own height, never on the
 // treetops above it, so the way in can be watched while it proves itself.
@@ -115,12 +124,22 @@ struct Config {
     // kWalkClimb, up or down, and anything more is a wall. The dead still
     // take no falling damage, but the route never feeds them into a drop
     // it cannot lead them out of: the stairs, the ramps and the notches
-    // are the way, and cliffs and pits wall both ways. kFall and
-    // kDigPenalty belong to the dig, turned off while the walk proves
-    // itself: kFall is how deep a single fall may pour, kDigPenalty the
-    // price of the spade's block; the flood still knows how to charge it,
-    // and turning it back on is one flag. Rooms without headroom stay
-    // unreachable.
+    // are the way, and cliffs and pits wall both ways. Beside that walk
+    // the dig walk runs, the spade's own: it takes what the legs refuse -
+    // a fall may pour up to kFall, and a climb beyond the jump is crossed
+    // at kDigPenalty steps a block, about the time its spade takes that
+    // block off, so a wall is a way in only when the way around it is the
+    // longer errand. Rooms without headroom stay unreachable even to the
+    // spade: the walk stands on surfaces, and a buried floor is none.
+    // The knobs of it, for the balance phase to turn: `dig` is the
+    // licence whole (the walk one way, the veto and the anchors stay the
+    // legs' own), kDigShortcut is how much of the legs' own way home the
+    // spade's way must save before any walker takes it - the legs' walk
+    // silent at a walker's feet counts as saving it all - and
+    // dig_seconds is the host's own pace of the work, one voxel of the
+    // crossing taken off a dig_seconds; the walk's price of that voxel
+    // and the host's pace of it keep the one clock, kDigPenalty steps a
+    // block and dig_seconds a voxel.
     // z grows downward, so a climb is the negative side of the delta.
     // kWalkDrop no longer bounds a crossing: it bounds a spawn. The anchor
     // of a wave stands at its ring's own ground level, never on a perch
@@ -128,6 +147,9 @@ struct Config {
     // foliage its legs cannot cross.
     static constexpr int kWalkDrop = 5, kWalkClimb = 2;
     static constexpr int kFall = 63, kDigPenalty = 12;
+    bool dig = true;
+    static constexpr int kDigShortcut = 100;
+    double dig_seconds = 3.0;
     // A crossing that changes floor is a crossing apart: the pack walks
     // best on one level, and every block of climb or drop it spends is
     // priced at kLevelShy steps, so the flood keeps to the flat wherever
@@ -239,6 +261,26 @@ public:
     // falls back to that one when the feet are in the air or on a floor
     // the walk has no opinion about.
     bool next_step(int x, int y, int z, int& tx, int& ty);
+    // The spade's advice: the same downhill read taken on the dig walk's
+    // own field, the one that crosses what the legs refuse - a fall may
+    // pour and a climb may be spaded through, both priced the dig's own
+    // dear prices - so the step handed back is not always one the legs
+    // can make: `tz` is the floor the crossing runs onto, and a climb of
+    // more than kWalkClimb over the walker's feet is the host's own
+    // signal to draw the spade, and a drop is walked off - the dead fear
+    // no landing. False where the dig walk is silent, or downhill has
+    // nothing to say; nothing is steered towards the core on a straight
+    // line here, for the dig advice is only asked where the legs' advice
+    // has already failed, and a straight line through a wall is how the
+    // wall got its crowd. Consulted only when dig_worth says so.
+    bool next_dig_step(int x, int y, int z, int& tx, int& ty, int& tz);
+    // Whether the spade's way is worth the walker's while, read at its
+    // feet: true when the legs' walk is silent there (no way home the
+    // legs can take), or when the dig walk's way home is shorter by at
+    // least kDigShortcut steps - the shortcut priced dear as it is, only
+    // an important one is taken. False when the dig is off or its walk
+    // has no way home either.
+    bool dig_worth(int x, int y, int z) const;
     // Whether a cell is within `cells` of the core, where the zombies bite.
     bool near_core(int x, int y, int cells) const;
 
@@ -254,6 +296,12 @@ public:
     // pack's line of march - the host paints it so the way can be watched.
     // False when the cell is not on the walk at all.
     bool trace_route(int x, int y, std::vector<RouteCell>& out);
+    // The same read off the dig walk's own field: the crossing downhill
+    // may be a wall's top or a drop, for the dig walk takes them - the
+    // route handed back is the spade's line of march, painted the same
+    // way, that a walled town may see where its fences will be gnawed.
+    // False on the same terms.
+    bool trace_dig(int x, int y, std::vector<RouteCell>& out);
 
     // For tests: the field's distance from the core, or -1 unreachable.
     int distance(int x, int y) const;
@@ -285,6 +333,10 @@ private:
     int surf_count(int x, int y);
     int surface(int x, int y, int k);
     int best_state(int x, int y) const;
+    // The dig walk's own read of the same two: the surface with the lowest
+    // dig distance, and the reached floor that meets the feet at z.
+    int best_dig_state(int x, int y) const;
+    int near_dig_state(int x, int y, int z) const;
     // The standing surface of the column the walk has reached that meets
     // the feet at z: of the floors that carry the body, the one this side
     // of its soles. -1 when no floor the field reaches is near the
@@ -323,6 +375,11 @@ private:
     // and the z of every surface the columns carry, scanned once a recompute
     // (surf_n_ of -1: this column is not scanned yet).
     std::vector<int32_t> dist_;
+    // The spade's own field: the same surfaces, the dig walk's own prices
+    // on the crossings between them. Its distance is never higher than
+    // the legs' own, and it is only read where the legs' reading fails or
+    // where the price of it buys a shortcut worth its while.
+    std::vector<int32_t> dig_dist_;
     std::vector<int16_t> surf_z_;
     std::vector<int8_t> surf_n_;
     bool field_dirty_ = false;

@@ -112,6 +112,39 @@ int Horde::best_state(int x, int y) const {
     return bk;
 }
 
+// The dig walk's own two reads of the same: best_dig_state the surface of
+// the lowest dig distance, near_dig_state the reached floor that meets
+// the feet at z. The dig field reaches everywhere the legs' field does
+// and further; its reads are asked only for the advice the legs cannot
+// give.
+int Horde::best_dig_state(int x, int y) const {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return -1;
+    int best = kUnreachable, bk = -1;
+    const int32_t* d = &dig_dist_[cell_index(x, y) * kSurfMax];
+    for (int k = 0; k < kSurfMax; ++k)
+        if (d[k] != kUnreachable && (best == kUnreachable || d[k] < best)) {
+            best = d[k];
+            bk = k;
+        }
+    return bk;
+}
+
+int Horde::near_dig_state(int x, int y, int z) const {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return -1;
+    const size_t i = cell_index(x, y);
+    const int32_t* dd = &dig_dist_[i * kSurfMax];
+    int bk = -1, bdz = 0;
+    for (int k = 0; k < kSurfMax; ++k) {
+        if (dd[k] == kUnreachable) continue;
+        const int dz = std::abs(static_cast<int>(surf_z_[i * kSurfMax + k]) - z);
+        if (bk < 0 || dz < bdz || (dz == bdz && dd[k] < dd[bk])) {
+            bk = k;
+            bdz = dz;
+        }
+    }
+    return bk;
+}
+
 // The column's first surface, its topmost floor: the level the anchors
 // filter their rings on.
 int Horde::ground(int x, int y) {
@@ -173,8 +206,8 @@ bool Horde::box_clear(int x, int y, int z) const {
 // and pits are walls both ways. With `dig` set it is the richer walk a
 // spade-wielding zombie could make: the falls come back, and any climb,
 // each block beyond the jump priced at kDigPenalty steps - about the
-// time its spade takes that block off - kept for the day the dead dig
-// again (the canopy of a forest is one such day's work).
+// time its spade takes that block off - the walk the anchors fall back
+// on when the legs' own cannot reach a way in at all.
 // `block_x` and `block_y` name one column held out of the walk, the
 // veto's candidate; -1 for none. 4-neighbours: corners are where zombies
 // jam on pillars, not where they cross. The edges are not all one step
@@ -243,9 +276,23 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
                 const int dz = surf_z_[ni * kSurfMax + m] - z;
                 int nd = d + 1;
                 if (dig) {
+                    // The spade's walk: the falls come back (a drop up to
+                    // kFall, the dead fear no landing) and a climb beyond
+                    // the jump is crossed at kDigPenalty steps a block -
+                    // about the time its spade takes that block off - so
+                    // a wall is a way in only when the way around it is
+                    // the longer errand. The steps the legs could take
+                    // keep their own level-shy price, so the dig walk
+                    // still prefers its flats and a pack on it stays one
+                    // pack.
                     if (dz > Config::kFall) continue;
-                    if (dz < -Config::kWalkClimb)
+                    if (dz > Config::kWalkClimb) {
+                        // the fall walks off freely: one way down
+                    } else if (dz < -Config::kWalkClimb) {
                         nd += Config::kDigPenalty * (-dz - Config::kWalkClimb);
+                    } else {
+                        nd += Config::kLevelShy * (dz < 0 ? -dz : dz);
+                    }
                 } else {
                     // Reversible: what the legs take down they take back up.
                     if (dz > Config::kWalkClimb || dz < -Config::kWalkClimb) continue;
@@ -315,8 +362,13 @@ void Horde::recompute() {
     surf_z_.assign(cells * kSurfMax, -1);
     surf_n_.assign(cells, -1);  // -1: not yet scanned
     // The walk without the spade: what legs can cross, and stairs when they
-    // cannot. Turning the dig back on is the `true` in this call.
+    // cannot. And the spade's own field beside it: the same surfaces, the
+    // crossings the legs refuse taken at their price, so the host has a
+    // way home to hand wherever the legs' walk falls silent, and knows
+    // when the price of it buys a shortcut worth its while. One recompute
+    // fills both.
     flood(dist_, -1, -1, false);
+    flood(dig_dist_, -1, -1, true);
     field_dirty_ = false;
     // The reading on the old field is stale now: the next waiting tick
     // (or the next wave) reads the anchors off this one again.
@@ -491,6 +543,65 @@ bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty) {
     return true;
 }
 
+// Whether the spade's way is worth the walker's while, read at its feet:
+// the legs' own walk has to be silent there - no way home the legs can
+// take - or the dig walk's way home must be shorter by at least
+// kDigShortcut of the legs' own steps. The dig walk's crossings are
+// already priced dear; this is the second gate, the one that keeps the
+// spade holstered while a walk of legs gets there nearly as soon.
+bool Horde::dig_worth(int x, int y, int z) const {
+    if (!cfg_.dig) return false;
+    const int kd = near_dig_state(x, y, z);
+    if (kd < 0) return false;
+    const int dg = dig_dist_[cell_index(x, y) * kSurfMax + kd];
+    if (dg < 0) return false;
+    const int kl = near_state(x, y, z);
+    const int leg = kl < 0 ? kUnreachable : dist_[cell_index(x, y) * kSurfMax + kl];
+    return leg < 0 || dg + Config::kDigShortcut <= leg;
+}
+
+// The spade's advice: a downhill read on the dig walk's own field, taken
+// from the floor the body stands on, exactly the legs' own read but for
+// the crossings the legs refuse - a fall may pour off of, a climb beyond
+// the jump is the host's signal to draw the spade (the crossing's own
+// surface is handed back in `tz`, and the walker's work is to take its
+// top off until what is left is a jump). No straight-line fallback here:
+// the advice is only asked where the legs' advice has already failed, and
+// a straight line is how a wall gathers its crowd. False where the dig
+// walk is silent at the feet, or downhill has nothing to hand back.
+bool Horde::next_dig_step(int x, int y, int zfoot, int& tx, int& ty, int& tz) {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
+    if (surf_count(x, y) <= 0) return false;  // nowhere to stand
+    const int rk = near_dig_state(x, y, zfoot);
+    const int here =
+        rk < 0 ? kUnreachable : dig_dist_[cell_index(x, y) * kSurfMax + rk];
+    if (here <= 0) return false;   // off the dig walk, or the core's own cell
+    const int z = surface(x, y, rk < 0 ? 0 : rk);
+    static const int kDx[4] = {1, -1, 0, 0};
+    static const int kDy[4] = {0, 0, 1, -1};
+    int best = -1, bx = -1, by = -1, bz = -1;
+    for (int k = 0; k < 4; ++k) {
+        const int nx = x + kDx[k], ny = y + kDy[k];
+        if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
+        const int base = cell_index(nx, ny) * kSurfMax;
+        for (int m = 0; m < surf_count(nx, ny); ++m) {
+            const int nd = dig_dist_[base + m];
+            if (nd < 0 || nd >= here) continue;  // downhill only
+            if (best < 0 || nd < best) {
+                best = nd;
+                bx = nx;
+                by = ny;
+                bz = surface(nx, ny, m);
+            }
+        }
+    }
+    if (bx < 0) return false;   // the doorstep is behind: nothing to advise
+    tx = bx;
+    ty = by;
+    tz = bz;
+    return true;
+}
+
 // The field's distance of the floor a body at z stands on: the walk read
 // at the feet, the number the host keeps window by window to tell a
 // walker that moves from a walker that gets somewhere.
@@ -563,6 +674,48 @@ bool Horde::trace_route(int x, int y, std::vector<RouteCell>& out) {
     return true;
 }
 
+// The same walk traced on the spade's own field: the crossings downhill
+// may be wall tops and drops the legs refuse, which is the point - the
+// host paints this route when the legs' own trace comes back empty, that
+// a walled town sees which of its fences the dead mean to take down. The
+// treads run at the dig walk's own height, wall tops included, and the
+// guard is the same guard against the same broken field.
+bool Horde::trace_dig(int x, int y, std::vector<RouteCell>& out) {
+    out.clear();
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
+    int k = best_dig_state(x, y);
+    if (k < 0) return false;
+    static const int kDx[4] = {1, -1, 0, 0};
+    static const int kDy[4] = {0, 0, 1, -1};
+    const size_t guard = static_cast<size_t>(kMapW) * kMapH;
+    while (out.size() < guard) {
+        const int z = surface(x, y, k);
+        out.push_back(RouteCell{x, y, z});
+        const int here = dig_dist_[cell_index(x, y) * kSurfMax + k];
+        int best = -1, bx = -1, by = -1, bk = -1;
+        for (int q = 0; q < 4; ++q) {
+            const int nx = x + kDx[q], ny = y + kDy[q];
+            if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
+            const int base = cell_index(nx, ny) * kSurfMax;
+            for (int m = 0; m < surf_count(nx, ny); ++m) {
+                const int nd = dig_dist_[base + m];
+                if (nd < 0 || nd >= here) continue;  // downhill only
+                if (best < 0 || nd < best) {
+                    best = nd;
+                    bx = nx;
+                    by = ny;
+                    bk = m;
+                }
+            }
+        }
+        if (bx < 0) break;
+        x = bx;
+        y = by;
+        k = bk;
+    }
+    return true;
+}
+
 // --- the veto ----------------------------------------------------------------
 
 // Two floods, one with the candidate column held out. The map is not touched
@@ -577,6 +730,7 @@ bool Horde::can_build(int x, int y, int z) {
     std::vector<int32_t> with_block;
     flood(with_block, x, y, false);
     flood(dist_, -1, -1, false);  // the walk's answer, not the veto's
+    flood(dig_dist_, -1, -1, true);   // the spade's kept in step with it
     field_dirty_ = false;
     if (reach_spawn(with_block)) return true;
     // Fail open: sealed before this block too - the tower stands or falls on
@@ -600,6 +754,14 @@ bool Horde::can_build(int x, int y, int z) {
 // sit in border mountains and sea, and a corner whose whole reach the
 // walk never touches has no anchor, and its share of the wave is simply
 // not raised.
+//
+// And when the legs' own reading anchors nothing at all - a town walled
+// whole, no corner's reach anywhere on the walk - the whole reading is
+// asked again of the spade's own field: the frontier stands outside the
+// same walls on the dig walk's own prices, a way in for every sealed
+// gate, and the wave comes to take the walls down at the pace they are
+// priced. That is the only reading the dig walk owns: a single way the
+// legs can take keeps the reading theirs.
 //
 // The corners are then RANKED by the way the walk reads into each: the
 // route traced from an anchor either ends at the core's doorstep or dies
@@ -625,15 +787,6 @@ bool Horde::can_build(int x, int y, int z) {
 // splits the pile apart as it walks. The anchors are kept.
 void Horde::scout() {
     if (field_dirty_) recompute();
-    // A cell the walk reaches, wherever it opens a floor to stand on.
-    auto stands = [&](int x, int y) {
-        if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
-        if (surf_count(x, y) <= 0) return false;
-        const int32_t* d = &dist_[cell_index(x, y) * kSurfMax];
-        for (int k = 0; k < kSurfMax; ++k)
-            if (d[k] >= 0) return true;
-        return false;
-    };
     // The anchors, every spawn point: the far end of the walk, the frontier.
     // The scan sweeps the rings around each point's asked-for centre out
     // to kSpawnSearch and keeps the cell the field reaches LAST, the walk's
@@ -645,90 +798,126 @@ void Horde::scout() {
     // one perched more than kWalkDrop above it. Ties keep the first cell
     // the scan reads.
     std::vector<int> rungs_x, rungs_y, rungs_g;
-    const auto note = [&](int x, int y) {
-        if (!stands(x, y)) return;
-        rungs_x.push_back(x);
-        rungs_y.push_back(y);
-        rungs_g.push_back(ground(x, y));
-    };
-    for (int c = 0; c < Config::kSpawnSites; ++c) {
-        anchor_x_[c] = -1;
-        anchor_y_[c] = 0;
-        const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
-        int best_d = -1;
-        for (int r = 0; r < Config::kSpawnSearch; ++r) {
-            rungs_x.clear();
-            rungs_y.clear();
-            rungs_g.clear();
-            // The ring's cells in reading order: the full rows on the
-            // frame's top and bottom, the side pair between them.
-            for (int y = cy - r; y <= cy + r; ++y) {
-                if (y == cy - r || y == cy + r) {
-                    for (int x = cx - r; x <= cx + r; ++x) note(x, y);
-                } else {
-                    note(cx - r, y);
-                    note(cx + r, y);
+    // One reading of the anchors and their ranking, leg walk or dig walk
+    // by the field it is handed: the dig pass asks the same questions of
+    // the same terrain on the spade's own field, so the sealed town that
+    // anchors nothing at all on the legs' pass still gets its fronts -
+    // anchored on the dig walk's own frontier, ranked by the dig walk's
+    // own arrival, the wave to walk them at the spade's own pace.
+    const auto pass = [&](const std::vector<int32_t>& fld, bool dig_read) {
+        // A cell the pass's field reaches, wherever it opens a floor to
+        // stand on.
+        const auto stands = [&](int x, int y) {
+            if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
+            if (surf_count(x, y) <= 0) return false;
+            const int32_t* d = &fld[cell_index(x, y) * kSurfMax];
+            for (int k = 0; k < kSurfMax; ++k)
+                if (d[k] >= 0) return true;
+            return false;
+        };
+        // The pass's own distance of a cell: its best state's.
+        const auto best_len = [&](int x, int y) {
+            int best = kUnreachable;
+            const int32_t* d = &fld[cell_index(x, y) * kSurfMax];
+            for (int k = 0; k < kSurfMax; ++k)
+                if (d[k] >= 0 && (best < 0 || d[k] < best)) best = d[k];
+            return best;
+        };
+        const auto note = [&](int x, int y) {
+            if (!stands(x, y)) return;
+            rungs_x.push_back(x);
+            rungs_y.push_back(y);
+            rungs_g.push_back(ground(x, y));
+        };
+        for (int c = 0; c < Config::kSpawnSites; ++c) {
+            anchor_x_[c] = -1;
+            anchor_y_[c] = 0;
+            const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
+            int best_d = -1;
+            for (int r = 0; r < Config::kSpawnSearch; ++r) {
+                rungs_x.clear();
+                rungs_y.clear();
+                rungs_g.clear();
+                // The ring's cells in reading order: the full rows on the
+                // frame's top and bottom, the side pair between them.
+                for (int y = cy - r; y <= cy + r; ++y) {
+                    if (y == cy - r || y == cy + r) {
+                        for (int x = cx - r; x <= cx + r; ++x) note(x, y);
+                    } else {
+                        note(cx - r, y);
+                        note(cx + r, y);
+                    }
                 }
-            }
-            if (rungs_x.empty()) continue;
-            // The ring's ground level: the height most of its candidates
-            // stand at, ties to the lower ground.
-            std::vector<int> levels(rungs_g);
-            std::sort(levels.begin(), levels.end());
-            int level = levels.front(), best_n = 0, run_n = 0;
-            for (size_t k = 0; k < levels.size(); ++k) {
-                if (k > 0 && levels[k] != levels[k - 1]) run_n = 0;
-                ++run_n;
-                if (run_n >= best_n) {
-                    best_n = run_n;
-                    level = levels[k];
+                if (rungs_x.empty()) continue;
+                // The ring's ground level: the height most of its candidates
+                // stand at, ties to the lower ground.
+                std::vector<int> levels(rungs_g);
+                std::sort(levels.begin(), levels.end());
+                int level = levels.front(), best_n = 0, run_n = 0;
+                for (size_t k = 0; k < levels.size(); ++k) {
+                    if (k > 0 && levels[k] != levels[k - 1]) run_n = 0;
+                    ++run_n;
+                    if (run_n >= best_n) {
+                        best_n = run_n;
+                        level = levels[k];
+                    }
                 }
-            }
-            for (size_t k = 0; k < rungs_x.size(); ++k) {
-                if (std::abs(rungs_g[k] - level) > Config::kWalkDrop) continue;
-                const int d = distance(rungs_x[k], rungs_y[k]);
-                if (d > best_d) {
-                    best_d = d;
-                    anchor_x_[c] = rungs_x[k];
-                    anchor_y_[c] = rungs_y[k];
+                for (size_t k = 0; k < rungs_x.size(); ++k) {
+                    if (std::abs(rungs_g[k] - level) > Config::kWalkDrop) continue;
+                    const int d = best_len(rungs_x[k], rungs_y[k]);
+                    if (d > best_d) {
+                        best_d = d;
+                        anchor_x_[c] = rungs_x[k];
+                        anchor_y_[c] = rungs_y[k];
+                    }
                 }
             }
         }
-    }
-    // The ranking: each anchored corner's way in, read out loud.
-    struct Ranked {
-        int corner, end, dist;
-        bool anchored;
-    };
-    std::vector<RouteCell> trace;
-    Ranked ways[Config::kSpawnSites];
-    for (int c = 0; c < Config::kSpawnSites; ++c) {
-        ways[c].corner = c;
-        ways[c].anchored = anchor_x_[c] >= 0;
-        ways[c].end = ways[c].dist = 0;
-        if (ways[c].anchored) {
-            trace_route(anchor_x_[c], anchor_y_[c], trace);
-            ways[c].dist = distance(anchor_x_[c], anchor_y_[c]);
-            ways[c].end = trace.empty()
-                              ? kUnreachable
-                              : distance(trace.back().x, trace.back().y);
+        // The ranking: each anchored corner's way in, read out loud.
+        struct Ranked {
+            int corner, end, dist;
+            bool anchored;
+        };
+        std::vector<RouteCell> trace;
+        Ranked ways[Config::kSpawnSites];
+        for (int c = 0; c < Config::kSpawnSites; ++c) {
+            ways[c].corner = c;
+            ways[c].anchored = anchor_x_[c] >= 0;
+            ways[c].end = ways[c].dist = 0;
+            if (ways[c].anchored) {
+                if (dig_read) trace_dig(anchor_x_[c], anchor_y_[c], trace);
+                else trace_route(anchor_x_[c], anchor_y_[c], trace);
+                ways[c].dist = best_len(anchor_x_[c], anchor_y_[c]);
+                ways[c].end = trace.empty()
+                                  ? kUnreachable
+                                  : best_len(trace.back().x, trace.back().y);
+            }
         }
-    }
-    std::sort(ways, ways + Config::kSpawnSites, [](const Ranked& a, const Ranked& b) {
-        if (a.anchored != b.anchored) return a.anchored;
-        if (!a.anchored) return a.corner < b.corner;
-        // A way in that arrives beats one that dies against a cliff.
-        const bool a_arrives = a.end <= 1, b_arrives = b.end <= 1;
-        if (a_arrives != b_arrives) return a_arrives;
-        // Between ways that both arrive, the shorter way walks first: how
-        // far a trace ends says whether it arrives, not how far it ran,
-        // and ranking the two by that end sent the wave down the longer
-        // way merely because it stepped onto the marker's shoulders.
-        if (a.dist != b.dist) return a.dist < b.dist;
-        if (a.end != b.end) return a.end < b.end;
-        return a.corner < b.corner;  // the map reads NE, NW, SE, SW last
-    });
-    for (int c = 0; c < Config::kSpawnSites; ++c) rank_corner_[c] = ways[c].corner;
+        std::sort(ways, ways + Config::kSpawnSites, [](const Ranked& a, const Ranked& b) {
+            if (a.anchored != b.anchored) return a.anchored;
+            if (!a.anchored) return a.corner < b.corner;
+            // A way in that arrives beats one that dies against a cliff.
+            const bool a_arrives = a.end <= 1, b_arrives = b.end <= 1;
+            if (a_arrives != b_arrives) return a_arrives;
+            // Between ways that both arrive, the shorter way walks first: how
+            // far a trace ends says whether it arrives, not how far it ran,
+            // and ranking the two by that end sent the wave down the longer
+            // way merely because it stepped onto the marker's shoulders.
+            if (a.dist != b.dist) return a.dist < b.dist;
+            if (a.end != b.end) return a.end < b.end;
+            return a.corner < b.corner;  // the map reads NE, NW, SE, SW last
+        });
+        for (int c = 0; c < Config::kSpawnSites; ++c) rank_corner_[c] = ways[c].corner;
+        for (int c = 0; c < Config::kSpawnSites; ++c)
+            if (anchor_x_[c] >= 0) return true;   // the pass found a way in
+        return false;
+    };
+    // The legs' pass first: the frontier of the walk that decides the
+    // veto and the steering. A town the walls sealed whole - the legs'
+    // pass anchors nothing anywhere - is handed to the spade's pass, its
+    // frontier outside the same walls and its crossings priced like its
+    // blocks: the wave still comes, at the pace the pricing says.
+    if (!pass(dist_, false) && cfg_.dig) pass(dig_dist_, true);
     scouted_ = true;
 }
 

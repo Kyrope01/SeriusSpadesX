@@ -119,6 +119,22 @@ constexpr float kPackCatch = 0.8f;
 // side stays owed until the door is truly walked through.
 constexpr float kPrintShoulder = 1.0f;
 
+// The reach a print is spent within - the width of the miss a walker may
+// make and still have paid for it. A trail bends, and the one that takes
+// a bend at a run carries its turn wide of the very print the bend stood
+// on: within half a pace of it the leg never came, and outside the
+// shoulder's plane the leg never crossed, so the print stood owed
+// behind a walker already past it - a step of doubling back, then
+// written into that walker's own prints for every heel behind it to
+// walk over again, the one zigzag become the whole line's. So the
+// half-pace disc was a stamp collector's: exact, and exacting. The
+// print is spent within this reach instead, and the miss a bend made
+// costs the walk nothing. The prints keep their exactness where it
+// counts: the trail still falls every half a pace, and the doorway's
+// print stands a pace past the wall's far face, so a door is walked
+// through still, and not crossed at the wall.
+constexpr float kPrintTouch = 0.7f;
+
 // The heel's own sight: a follower this close to the one it follows is
 // not stuck - it is parked. The line's heel holds its place by stirring
 // on the spot, a print owed it every half a pace, and the held heel is
@@ -1195,7 +1211,8 @@ struct Server::Impl {
 
     // The next print the follower owes a step to: the oldest print of the
     // one ahead that its own feet have not stood on yet. A print is
-    // stood on when the walker is half a pace from it, or past it at
+    // stood on when the walker comes within kPrintTouch of it, or past
+    // it at
     // the shoulder's width, and it is spent
     // when the walker has come nearer a later print - a print overtaken
     // or flung over is behind the walk and owed no step. The ring is
@@ -1239,7 +1256,7 @@ struct Server::Impl {
             const float ddx = a.heel_x[slot] - x;
             const float ddy = a.heel_y[slot] - y;
             const float d2 = ddx * ddx + ddy * ddy;
-            if (d2 >= 0.25f && !trodden_beside(a, slot, x, y) &&
+            if (d2 >= kPrintTouch * kPrintTouch && !trodden_beside(a, slot, x, y) &&
                 (nearer_later < 0.0f || nearer_later >= d2))
                 chosen = slot;          // nothing later lies nearer: still owed
             nearer_later = nearer_later < 0.0f ? d2 : std::min(nearer_later, d2);

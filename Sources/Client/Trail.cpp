@@ -123,7 +123,6 @@ namespace spades {
 		param.xray = through;
 		// The knot itself is voxels of (0, 0, 0): the renderer paints them
 		// with the front's own colour, the whole way one colour held.
-		const float scale = size / 3.0F;
 
 		int budget = kMaxCrumbs;
 		for (size_t front = 0; front < paths.size(); front++) {
@@ -132,6 +131,17 @@ namespace spades {
 				continue;
 			param.customColor = p.color;
 			param.xrayColor = p.color;
+
+			// The breadth of a way, its own. Two colours laid over one
+			// ground fight for the same faces - two ways of one breadth
+			// share their planes, and the renderer parts them only by
+			// the flip of a coin - so each front stands a touch broader
+			// or a touch slighter than its neighbour, front by front,
+			// every way one breadth along itself, and the planes that
+			// overlapped fall out of step, the flicker gone with them.
+			const float girth =
+			  1.0F + static_cast<float>(((front * 7U) % 13U) - 6U) * (1.0F / 60.0F);
+			const float scale = size / 3.0F * girth;
 
 			// One way's own beat. A line reads as a line only walking
 			// whole, so one front's crumbs lock step with one another;

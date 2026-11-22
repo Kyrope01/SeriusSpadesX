@@ -119,6 +119,19 @@ constexpr float kPackCatch = 0.8f;
 // side stays owed until the door is truly walked through.
 constexpr float kPrintShoulder = 1.0f;
 
+// The heel's own sight: a follower this close to the one it follows is
+// not stuck - it is parked. The line's heel holds its place by stirring
+// on the spot, a print owed it every half a pace, and the held heel is
+// the shape the line itself has settled into. The window, reading that
+// stirring as a standstill, hopped it on the spot and flung it through
+// the backs of its own - the vault that clears a wall shoving aside a
+// walker that was standing where it belonged - and the line zigged and
+// zagged at the price of all the run had gained on it. So within this
+// sight of the one ahead the window is shelved: the follower parks, and
+// its ahead walks on past the sight the window takes it back - the first
+// hop and then the vault, for a wall behind a heel still gives way.
+constexpr float kHeelSight = 3.0f;
+
 // The number of the next heel print: from one, so a zero marks an empty
 // slot and never a print. The count outlives every walk the world keeps.
 uint32_t heel_stamp() {
@@ -1428,6 +1441,18 @@ struct Server::Impl {
             }
             if (moved < 0.35f ||
                 p.stall_windows >= kZombieYoyoWindows) {
+                // A heel held is a place kept, not a standstill: within
+                // the sight of the one ahead, the window is shelved.
+                if (ahead && ahead->id != p.id && ahead->zombie &&
+                    ahead->alive) {
+                    const float sdx = ahead->body.pos.x - p.body.pos.x;
+                    const float sdy = ahead->body.pos.y - p.body.pos.y;
+                    if (sdx * sdx + sdy * sdy <
+                        kHeelSight * kHeelSight) {
+                        p.stuck_at = -1.0;
+                        return;
+                    }
+                }
                 if (p.stuck_at < 0.0) p.stuck_at = world_time;
                 // The fling. The reading crosses steps two blocks tall at
                 // the price of a jump, and a jump alone was never going to

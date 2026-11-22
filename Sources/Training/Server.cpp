@@ -24,9 +24,11 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <iterator>
 #include <memory>
 #include <random>
 #include <thread>
@@ -102,6 +104,17 @@ constexpr uint32_t kFrontColour[horde::Config::kSpawnSites] = {
     0xFF8000, 0xFF38B8, 0x3098FF, 0xFFE530, 0xFF2828,
     0x40FF40, 0x00F0E8, 0xB050FF, 0xC8FF40, 0x20D0A0};
 
+// The sentry guns' three levels, a colour a level: a family of greens the
+// client learns for its own works, the brightness counting from the top
+// tier down. Red, yellow and blue stay held for the flamethrower, grenade
+// and electric families to come.
+constexpr int kTurretLevels = 3;
+constexpr uint32_t kTurretColour[kTurretLevels] = {0x00BE00, 0x008C00, 0x005000};
+// The blocks the server's guns are placed by: a nobody, whose colour the
+// clients take from the last colour the nobody was said to wear, so the
+// level's own colour goes out before the first block that wears it.
+constexpr uint8_t kTurretBlockId = 255;
+
 // The catch of the pack: a follower runs once its leader stands more than
 // this far ahead. Every heel of the line walks at the same pace as the one
 // it holds, so the ground never closes a gap on its own - whatever a hop, a
@@ -172,6 +185,21 @@ uint32_t heel_stamp() {
     static uint32_t n = 0;
     if (++n == 0) n = 1;
     return n;
+}
+
+// horde.toml's own small mercies: a line's whitespace off both ends, and a
+// word folded to lower case, so a file the host writes reads the same
+// whatever hand it was written with.
+static std::string trimmed(std::string s) {
+    const size_t a = s.find_first_not_of(" \t\r");
+    if (a == std::string::npos) return {};
+    const size_t b = s.find_last_not_of(" \t\r");
+    return s.substr(a, b - a + 1);
+}
+static std::string lowered(std::string s) {
+    for (char& c : s)
+        c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    return s;
 }
 
 double now_sec() {
@@ -379,6 +407,7 @@ struct Player {
     bool ext_outfit = false;      // claimed Player Outfit (0x35)
     bool ext_smoke = false;       // claimed Smoke (0x3F), version whatever
     bool ext_trail = false;       // claimed Smoke v2: the ways in as paths, not beds
+    bool ext_turrets = false;     // claimed Smoke v3: the sentry guns, drawn over their blocks
     // The walk and jump flags the zombies' clients were last told, and the
     // bite whose swing packet has yet to be closed. Real players tell the
     // clients these things themselves; the horde is told for them.
@@ -455,6 +484,35 @@ struct Player {
 
     bool spectator() const { return team == -1; }
     bool playing() const { return named && (team == 0 || team == 1); }
+};
+
+// The sentry guns' tuning, as the host's horde.toml says it: how far a gun
+// can see, how often it looks around, how far off the eye the ground may
+// be to found a gun on, and for each level the damage a shot does and the
+// seconds between shots. The defaults are the machine gun family's own.
+struct TurretTuning {
+    float range = 48.0f;
+    double scan = 0.25;
+    float place_range = 8.0f;
+    int damage[kTurretLevels] = {20, 25, 10};
+    double interval[kTurretLevels] = {0.5, 0.4, 0.15};
+};
+
+// One placed gun: a pillar of two real blocks the server aims and fires.
+// The blocks are the game's own map - walked on, shot at, torn down like
+// any wall - and the entity is only the server's own play upon them: what
+// it has found to shoot, when it looks next, and the aim as the wire
+// quantizes it for the clients that draw the works over the blocks.
+struct Turret {
+    uint8_t id = 0;              // the wire's own name for it, 1..255
+    int level = 1;               // 1..3: an index of the tuning tables
+    int x = 0, y = 0;            // the pillar's own column
+    int z = 0;                   // the pillar's LOWER block; the upper is z - 1
+    int owner = -1;               // the builder, whose the kills are
+    int aim_id = -1;              // the walker it is on, when it is on one
+    bool locked = false;
+    uint8_t yaw_pack = 0, pitch_pack = 0;   // the aim, quantized for the wire
+    double next_scan = 0.0, next_fire = 0.0;
 };
 
 struct Grenade {
@@ -651,6 +709,17 @@ struct Server::Impl {
     bool trail_sent_any[horde::Config::kSpawnSites] = {};
     // When every path is said again whole, whatever happened to them.
     double trail_resend_next = 0.0;
+    // The sentry guns: the ones standing, the host's own tuning read for
+    // them, the next of the wire's names, and the wire's memory of what it
+    // last said - a set that changed is the only one worth saying, the
+    // trail's own economy, and a client that finishes loading mid-game is
+    // owed it by the same five-second refresh.
+    std::vector<Turret> turrets;
+    TurretTuning turret_cfg;
+    uint8_t turret_next_id = 1;
+    double turret_resend_next = 0.0;
+    std::vector<proto::TurretState> turrets_sent;
+    bool turrets_sent_any = false;
     void serve_maps() {
         if (job_running && job_done.load()) {
             map_job.join();
@@ -1235,6 +1304,516 @@ struct Server::Impl {
             }
         }
     }
+    // --- the sentry guns ---------------------------------------------------
+    // A pillar of two real blocks, placed on a block a builder looks at
+    // and aimed by the server: the blocks are the game's own map, walked
+    // on, shot at, torn down like any wall, and what stands on them is the
+    // server's own play upon them. To a client that has not learned the
+    // word for it the gun is its blocks: a coloured pillar that hurts,
+    // and that is a playable game all by itself. To a client that claimed
+    // the smoke's third version the works are drawn over the blocks: the
+    // list of guns and the aim the server holds said to it at once (sub
+    // 3), and every shot the moment its damage lands (sub 4).
+
+    // Where a gun's works are: the centre of its top block, one block
+    // above the ground it stands on.
+    Vec3 turret_muzzle(const Turret& t) const {
+        return Vec3{static_cast<float>(t.x) + 0.5f, static_cast<float>(t.y) + 0.5f,
+                    static_cast<float>(t.z) - 1.0f};
+    }
+
+    // horde.toml beside the server, seen again at every start of a horde
+    // world: sections under [brackets], `key = value` lines, values a
+    // number or a list of numbers in brackets, comments from # or ; to
+    // the end of the line. Unknown keys and sections are skipped, a
+    // malformed line is skipped, and no file at all changes nothing: the
+    // defaults are the game as the fork always played it.
+    void load_turrets_tuning() {
+        std::ifstream in("horde.toml", std::ios::binary);
+        if (!in) {
+            log("no horde.toml beside the server: the guns stand on their own defaults");
+            return;
+        }
+        const std::string text((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        auto number = [](const std::string& s) {
+            return std::strtod(s.c_str(), nullptr);
+        };
+        auto numbers = [](const std::string& s, std::vector<double>& out) {
+            out.clear();
+            std::string body = s;
+            const size_t open = s.find('['), shut = s.rfind(']');
+            if (open != std::string::npos && shut != std::string::npos && shut > open)
+                body = s.substr(open + 1, shut - open - 1);
+            size_t from = 0;
+            for (;;) {
+                const size_t comma = body.find(',', from);
+                const std::string one = comma == std::string::npos
+                                            ? body.substr(from)
+                                            : body.substr(from, comma - from);
+                const std::string cut = trimmed(one);
+                if (!cut.empty()) out.push_back(std::strtod(cut.c_str(), nullptr));
+                if (comma == std::string::npos) break;
+                from = comma + 1;
+            }
+        };
+        std::string section;
+        size_t from = 0;
+        while (from <= text.size()) {
+            const size_t nl = text.find('\n', from);
+            std::string line = nl == std::string::npos ? text.substr(from)
+                                                       : text.substr(from, nl - from);
+            if (nl == std::string::npos && line.empty() && from > 0) break;
+            from = nl == std::string::npos ? text.size() + 1 : nl + 1;
+            for (const char mark : {'#', ';'}) {
+                const size_t at = line.find(mark);
+                if (at != std::string::npos) line.resize(at);
+            }
+            line = trimmed(line);
+            if (line.empty()) continue;
+            if (line.front() == '[') {
+                const size_t shut = line.find(']');
+                section = shut == std::string::npos ? std::string{}
+                                                    : lowered(trimmed(line.substr(1, shut - 1)));
+                continue;
+            }
+            const size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string key = lowered(trimmed(line.substr(0, eq)));
+            const std::string value = trimmed(line.substr(eq + 1));
+            if (section != "turrets") continue;
+            if (key == "range") {
+                turret_cfg.range = std::max(1.0f, static_cast<float>(number(value)));
+            } else if (key == "scan_interval") {
+                turret_cfg.scan = std::max(0.05, number(value));
+            } else if (key == "place_range") {
+                turret_cfg.place_range = std::min(16.0f, std::max(1.0f, static_cast<float>(number(value))));
+            } else if (key == "damage" || key == "interval") {
+                std::vector<double> ns;
+                numbers(value, ns);
+                for (size_t i = 0; i < ns.size() && i < kTurretLevels; ++i) {
+                    if (key == "damage") {
+                        if (ns[i] >= 0) turret_cfg.damage[i] = static_cast<int>(ns[i]);
+                    } else {
+                        turret_cfg.interval[i] = std::max(0.05, ns[i]);
+                    }
+                }
+            }
+        }
+        log("horde.toml: turrets range %.0f, scan %.2f, place %.0f, damage %d/%d/%d, interval %.2f/%.2f/%.2f",
+            static_cast<double>(turret_cfg.range), turret_cfg.scan,
+            static_cast<double>(turret_cfg.place_range),
+            turret_cfg.damage[0], turret_cfg.damage[1], turret_cfg.damage[2],
+            turret_cfg.interval[0], turret_cfg.interval[1], turret_cfg.interval[2]);
+    }
+
+    // One block's worth of the pillar, aired to the clients as the work of
+    // the server's own nobody: a block built by a player that is not one
+    // is drawn in the last colour the nobody was said to wear, so the
+    // level's colour is said - the SetColor - before the builds that wear
+    // it, and the packets a loading client keeps go out in that order.
+    void turret_colour_said(uint32_t rgb) {
+        ByteWriter c;
+        c.write_u8(static_cast<uint8_t>(PacketId::SetColor));
+        c.write_u8(kTurretBlockId);
+        write_color(c, rgb);
+        broadcast(c, true);
+    }
+    void turret_block_built(int x, int y, int z) {
+        ByteWriter bw;
+        bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+        bw.write_u8(kTurretBlockId);
+        bw.write_u8(static_cast<uint8_t>(kBuildBlock));
+        bw.write_i32(x);
+        bw.write_i32(y);
+        bw.write_i32(z);
+        broadcast(bw, true);
+    }
+
+    // The block under the builder's eye, along the line they look down, out
+    // to the place's own reach: the gun goes ON that block, not in front of
+    // it - what the crosshair names is the ground the pillar stands on.
+    bool turret_aim_hit(const Player& p, int& hx, int& hy, int& hz) const {
+        const Vec3& o = p.body.pos;
+        const Vec3& d = p.body.ori;
+        for (float s = 0.5f; s <= turret_cfg.place_range; s += 0.1f) {
+            const int ix = static_cast<int>(std::floor(o.x + d.x * s));
+            const int iy = static_cast<int>(std::floor(o.y + d.y * s));
+            const int iz = static_cast<int>(std::floor(o.z + d.z * s));
+            if (!VoxelMap::valid(ix, iy, iz)) return false;
+            if (map.solid(ix, iy, iz)) {
+                hx = ix;
+                hy = iy;
+                hz = iz;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // The gun a pillar cell belongs to: both its blocks carry its name.
+    int turret_at(int x, int y, int z) const {
+        for (size_t i = 0; i < turrets.size(); ++i) {
+            const Turret& t = turrets[i];
+            if (t.x != x || t.y != y) continue;
+            if (z == t.z || z == t.z - 1) return static_cast<int>(i);
+        }
+        return -1;
+    }
+
+    // Whether the gun's own flight is clear to a body: sampled a quarter
+    // block a step, the first block and a half stepped over for the pillar
+    // the works stand on.
+    bool turret_sight(const Vec3& from, const Vec3& to) const {
+        const float dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+        const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist < 1.5f) return true;
+        const int steps = std::max(2, static_cast<int>(dist / 0.25f));
+        for (int k = 6; k < steps; ++k) {
+            const float s = static_cast<float>(k) / static_cast<float>(steps);
+            const int ix = static_cast<int>(std::floor(from.x + dx * s));
+            const int iy = static_cast<int>(std::floor(from.y + dy * s));
+            const int iz = static_cast<int>(std::floor(from.z + dz * s));
+            if (map.solid(ix, iy, iz)) return false;
+        }
+        return true;
+    }
+
+    // The aim, quantized for the wire: the word the smoke buries in its
+    // third version, so the client that draws the works needs no other.
+    // The climb is read with smaller z the higher, the same as everywhere
+    // here: a target above reads a negative pitch.
+    static uint8_t turret_yaw_pack(float dx, float dy) {
+        const double deg = std::atan2(static_cast<double>(dx), static_cast<double>(dy)) *
+                           (180.0 / 3.14159265358979323846);
+        const long q = std::lround((deg + 180.0) * 128.0 / 360.0);
+        return static_cast<uint8_t>(static_cast<unsigned long>(q) & 127UL);
+    }
+    static uint8_t turret_pitch_pack(float dx, float dy, float dz) {
+        const double ground = std::sqrt(static_cast<double>(dx) * dx +
+                                        static_cast<double>(dy) * dy);
+        const double deg = std::atan2(static_cast<double>(dz), ground) *
+                           (180.0 / 3.14159265358979323846);
+        long q = std::lround((deg + 80.0) * 127.0 / 160.0);
+        if (q < 0) q = 0;
+        if (q > 127) q = 127;
+        return static_cast<uint8_t>(q);
+    }
+
+    // The whole set, as the wire says it.
+    std::vector<proto::TurretState> turret_state_now() const {
+        std::vector<proto::TurretState> list;
+        for (const Turret& t : turrets) {
+            proto::TurretState s;
+            s.id = t.id;
+            s.level = static_cast<uint8_t>(t.level);
+            s.x = static_cast<int16_t>(t.x);
+            s.y = static_cast<int16_t>(t.y);
+            s.z = static_cast<uint8_t>(t.z);
+            s.locked = t.locked ? 1 : 0;
+            s.yaw_pack = t.yaw_pack;
+            s.pitch_pack = t.pitch_pack;
+            list.push_back(s);
+        }
+        return list;
+    }
+
+    // The whole set said again: at once when it changed, and whole every
+    // five seconds whatever happened, so a client that finished loading
+    // mid-game is never left staring at guns it cannot see. A set that
+    // is said and unchanged keeps its peace; an empty set that was never
+    // said owes nothing.
+    void turret_state_send() {
+        const std::vector<proto::TurretState> list = turret_state_now();
+        if (list.empty() && !turrets_sent_any) return;
+        const bool again = world_time >= turret_resend_next;
+        if (again) turret_resend_next = world_time + kTrailResend;
+        const bool same =
+            (list.empty() && turrets_sent.empty()) ||
+            (!list.empty() && turrets_sent_any && list.size() == turrets_sent.size() &&
+             std::equal(list.begin(), list.end(), turrets_sent.begin(),
+                        [](const proto::TurretState& a, const proto::TurretState& b) {
+                            return a.id == b.id && a.level == b.level && a.x == b.x &&
+                                   a.y == b.y && a.z == b.z && a.locked == b.locked &&
+                                   a.yaw_pack == b.yaw_pack && a.pitch_pack == b.pitch_pack;
+                        }));
+        if (same && !again) return;
+        turrets_sent = list;
+        turrets_sent_any = !list.empty();
+        ByteWriter bw;
+        proto::write_turrets(bw, list);
+        for (auto& o : players)
+            if (o && o->peer && !o->loading && o->ext_turrets && o->playing()) send(*o, bw);
+    }
+
+    // A pillar taken down: whatever blocks of it still stand go with it,
+    // so no coloured stub of a dead gun is left floating, and the wire
+    // says the gun is gone by no longer saying it.
+    void turret_erase(size_t i) {
+        const Turret t = turrets[i];
+        std::vector<Cell> removed;
+        for (int j = 0; j < 2; ++j) {
+            const int z = t.z - j;
+            if (!map.solid(t.x, t.y, z)) continue;
+            ByteWriter bw;
+            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+            bw.write_u8(kTurretBlockId);
+            bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
+            bw.write_i32(t.x);
+            bw.write_i32(t.y);
+            bw.write_i32(z);
+            broadcast(bw, true);
+            map.destroy_point(t.x, t.y, z, &removed);
+        }
+        touched(removed, false);
+        turrets.erase(turrets.begin() + static_cast<long>(i));
+        turret_resend_next = 0.0;
+    }
+
+    // A pillar said at a new level: the same blocks, wearing the new
+    // tier's colour. A build aired over a standing block repaints it, so
+    // the blocks need no destroy to say a new colour.
+    void turret_repaint(Turret& t) {
+        const uint32_t rgb = kTurretColour[static_cast<size_t>(t.level) - 1];
+        turret_colour_said(rgb);
+        for (int j = 0; j < 2; ++j) {
+            const int z = t.z - j;
+            if (!map.solid(t.x, t.y, z)) continue;
+            map.set(t.x, t.y, z, 0x7F000000u | rgb);
+            turret_block_built(t.x, t.y, z);
+        }
+    }
+
+    // The walker the gun should be on: the nearest one whose body the
+    // works can see, the eye first, the chest a half block lower second -
+    // a crowd in the lane does not hide the one at its front.
+    bool turret_targets(const Turret& t, int& out) const {
+        const Vec3 muzzle = turret_muzzle(t);
+        const float r2 = turret_cfg.range * turret_cfg.range;
+        struct Cand {
+            float d2;
+            int id;
+        };
+        std::vector<Cand> candidates;
+        for (auto& q : players) {
+            if (!q || !q->zombie || !q->alive || q->spectator()) continue;
+            const float dx = q->body.pos.x - muzzle.x;
+            const float dy = q->body.pos.y - muzzle.y;
+            const float dz = q->body.pos.z - muzzle.z;
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 > r2) continue;
+            candidates.push_back(Cand{d2, q->id});
+        }
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const Cand& a, const Cand& b) { return a.d2 < b.d2; });
+        for (const Cand& c : candidates) {
+            const Player& q = *players[static_cast<size_t>(c.id)];
+            if (turret_sight(muzzle, q.body.pos) ||
+                turret_sight(muzzle, Vec3{q.body.pos.x, q.body.pos.y,
+                                          q.body.pos.z + 0.6f})) {
+                out = c.id;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Every gun's own moment: the pillars that were dug out from under
+    // them go first, then the ones that stand look around on the scan's
+    // clock, fire on the interval's, and say themselves when they changed.
+    void turret_tick() {
+        if (!horde_mode()) return;
+        for (size_t i = 0; i < turrets.size();) {
+            Turret& t = turrets[i];
+            if (!map.solid(t.x, t.y, t.z) || !map.solid(t.x, t.y, t.z - 1)) {
+                turret_erase(i);
+                continue;
+            }
+            if (world_time >= t.next_scan) {
+                t.next_scan = world_time + turret_cfg.scan;
+                int target = -1;
+                const bool found = turret_targets(t, target);
+                if (found != t.locked) {
+                    t.locked = found;
+                    if (found) t.next_fire = world_time + 0.1;  // a blink to bring the works round
+                }
+                t.aim_id = found ? target : -1;
+                if (found) {
+                    const Player& q = *players[static_cast<size_t>(target)];
+                    const Vec3 muzzle = turret_muzzle(t);
+                    const float dx = q.body.pos.x - muzzle.x;
+                    const float dy = q.body.pos.y - muzzle.y;
+                    const float dz = q.body.pos.z - muzzle.z;
+                    t.yaw_pack = turret_yaw_pack(dx, dy);
+                    t.pitch_pack = turret_pitch_pack(dx, dy, dz);
+                }
+            }
+            if (t.aim_id >= 0) {
+                Player* q =
+                    t.aim_id < kSlots ? players[static_cast<size_t>(t.aim_id)].get() : nullptr;
+                if (q && q->zombie && q->alive && world_time >= t.next_fire) {
+                    t.next_fire =
+                        world_time + turret_cfg.interval[static_cast<size_t>(t.level) - 1];
+                    // The kill is the builder's: the gun only spends it,
+                    // and a builder long gone leaves it to the walker's
+                    // own fall.
+                    Player* credit = nullptr;
+                    if (t.owner >= 0 && t.owner < kSlots) {
+                        Player* op = players[static_cast<size_t>(t.owner)].get();
+                        if (op && op->named && !op->zombie && op->playing()) credit = op;
+                    }
+                    const Vec3 muzzle = turret_muzzle(t);
+                    set_hp(*q, q->hp -
+                                   turret_cfg.damage[static_cast<size_t>(t.level) - 1],
+                           credit, kWeaponKill, &muzzle);
+                    ByteWriter bw;
+                    proto::write_turret_shot(bw, t.id);
+                    for (auto& o : players)
+                        if (o && o->peer && !o->loading && o->ext_turrets && o->playing())
+                            send(*o, bw);
+                }
+            }
+            ++i;
+        }
+        turret_state_send();
+    }
+
+    // The builder's word to the server made good: a pillar on the block
+    // the eye names, two cells of free air above it, the map's own rules
+    // obeyed, the core's column and the last way in alike. An aim that
+    // finds a pillar standing raises it instead, when the word named a
+    // higher level; a lower word does not undo a pillar: the way back is
+    // the spade, as with any build.
+    void turret_place(Player& p, int level, std::string& reply) {
+        if (!horde_mode()) {
+            reply = "Sentry guns are a thing of the horde.";
+            return;
+        }
+        if (!p.alive || !p.playing()) {
+            reply = "Spawn in before placing sentries.";
+            return;
+        }
+        int hx = 0, hy = 0, hz = 0;
+        if (!turret_aim_hit(p, hx, hy, hz)) {
+            reply = "Aim at a block to place the sentry on it.";
+            return;
+        }
+        const int standing = turret_at(hx, hy, hz);
+        if (standing >= 0) {
+            Turret& t = turrets[static_cast<size_t>(standing)];
+            if (t.level == level) {
+                reply = "That pillar already stands at level " + std::to_string(level) + ".";
+                return;
+            }
+            if (level < t.level) {
+                reply = "A pillar is not undone: dig the blocks out instead.";
+                return;
+            }
+            t.level = level;
+            turret_repaint(t);
+            turret_resend_next = 0.0;
+            reply = t.owner == p.id
+                        ? "The pillar is raised to level " + std::to_string(level) + "."
+                        : "Not yours, but raised all the same: level " + std::to_string(level) + ".";
+            return;
+        }
+        if (hz < 2 || hz > 62 || map.solid(hx, hy, hz - 1) || map.solid(hx, hy, hz - 2)) {
+            reply = "Not enough room above that block.";
+            return;
+        }
+        if (core_column_cell(hx, hy, hz - 1) || core_column_cell(hx, hy, hz - 2)) {
+            reply = "The core's column is not for sentries.";
+            return;
+        }
+        if (horde && (!horde->can_build(hx, hy, hz - 1) || !horde->can_build(hx, hy, hz - 2))) {
+            reply = "That place would seal the last way in.";
+            return;
+        }
+        const uint32_t rgb = kTurretColour[static_cast<size_t>(level) - 1];
+        turret_colour_said(rgb);
+        std::vector<Cell> built;
+        if (map.build_point(hx, hy, hz - 1, 0x7F000000u | rgb)) {
+            built.push_back(Cell{hx, hy, hz - 1});
+            turret_block_built(hx, hy, hz - 1);
+        }
+        if (map.build_point(hx, hy, hz - 2, 0x7F000000u | rgb)) {
+            built.push_back(Cell{hx, hy, hz - 2});
+            turret_block_built(hx, hy, hz - 2);
+        }
+        touched(built, true);
+        if (built.empty()) {
+            reply = "Not enough room above that block.";
+            return;
+        }
+        // Its name: the next of the wire's own, never one in flight.
+        uint8_t id = turret_next_id;
+        for (;;) {
+            bool used = false;
+            for (const Turret& t : turrets)
+                if (t.id == id) {
+                    used = true;
+                    break;
+                }
+            if (!used) break;
+            if (++id == 0) id = 1;
+        }
+        turret_next_id = id == 255 ? 1 : static_cast<uint8_t>(id + 1);
+        Turret t;
+        t.id = id;
+        t.level = level;
+        t.x = hx;
+        t.y = hy;
+        t.z = hz - 1;
+        t.owner = p.id;
+        t.next_scan = world_time + 0.1;  // a fresh gun looks around at once
+        turrets.push_back(t);
+        turret_resend_next = 0.0;
+        reply = "Sentry level " + std::to_string(level) + " placed.";
+    }
+
+    // A builder's own pillars taken back down: only their own, the rest
+    // of the team's works are not theirs to unsettle.
+    int turret_remove_owned(const Player& p) {
+        int down = 0;
+        for (size_t i = 0; i < turrets.size();) {
+            if (turrets[i].owner != p.id) {
+                ++i;
+                continue;
+            }
+            turret_erase(i);
+            ++down;
+        }
+        return down;
+    }
+
+    // The builder's own word for a gun: /turret places one of the level
+    // the word names, bare /turret the first, and a word that finds a
+    // pillar standing raises it instead; /turretremove takes the
+    // builder's own pillars down. /sentry says the same as /turret.
+    void turret_command(Player& p, const std::string& text) {
+        const std::string word = lowered(text);
+        if (word == "/turretremove" || word == "/sentryremove") {
+            const int down = turret_remove_owned(p);
+            system_chat(down > 0 ? std::to_string(down) + " sentries taken down."
+                                 : "You have no sentries.", p.id);
+            return;
+        }
+        const std::string rest =
+            trimmed(word.size() < 7 ? word : word.substr(7));
+        int level = 1;
+        if (!rest.empty()) {
+            if (rest[0] >= '1' && rest[0] <= '3') {
+                level = rest[0] - '0';
+            } else {
+                system_chat("usage: /turret [1-3]", p.id);
+                return;
+            }
+        }
+        std::string reply;
+        turret_place(p, level, reply);
+        system_chat(reply, p.id);
+    }
+
     // One frame of teeth, or of the spade: the swing the clients animate,
     // closed again in the tick after.
     void show_swing(Player& p, double span) {
@@ -1678,6 +2257,7 @@ struct Server::Impl {
         if (world_time < p.next_bite) return;
         const int cx = static_cast<int>(std::floor(p.body.pos.x));
         const int cy = static_cast<int>(std::floor(p.body.pos.y));
+        const int fz = static_cast<int>(std::floor(p.body.pos.z + 2.25f));
         bool bit = false;
         if (horde->near_core(cx, cy, 2)) {
             horde->on_core_damaged(10);
@@ -1690,7 +2270,39 @@ struct Server::Impl {
                 system_chat(text);
             }
         }
+        // A gun in the way and at the walker's own height is gnawed at
+        // like any wall the teeth come to: the pillar is two real blocks,
+        // and the way a horde has always had against walls is patience,
+        // at the blocks. Only a pillar that stands IN the lane pays: two
+        // blocks off the line at most, and at the walker's own band of
+        // height, the footing cell and two above it. A gun set on a
+        // perch or beside the stream is never so much as looked at, and
+        // that margin is the whole game of the placing.
+        for (auto& t : turrets) {
+            if (bit) break;
+            const float gdx = static_cast<float>(t.x) + 0.5f - p.body.pos.x;
+            const float gdy = static_cast<float>(t.y) + 0.5f - p.body.pos.y;
+            if (gdx * gdx + gdy * gdy > 4.0f) continue;
+            if (t.z > fz || t.z < fz - 2) continue;
+            int bz = t.z;
+            if (!map.solid(t.x, t.y, bz)) bz = t.z - 1;
+            if (!map.solid(t.x, t.y, bz)) continue;
+            ByteWriter bw;
+            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+            bw.write_u8(static_cast<uint8_t>(p.id));
+            bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
+            bw.write_i32(t.x);
+            bw.write_i32(t.y);
+            bw.write_i32(bz);
+            broadcast(bw, true);
+            std::vector<Cell> removed;
+            map.destroy_point(t.x, t.y, bz, &removed);
+            touched(removed, false);
+            bit = true;
+            break;
+        }
         for (auto& qq : players) {
+            if (bit) break;
             if (!qq || qq->zombie || !qq->alive || qq->spectator() || qq->team != kPeople) continue;
             if (!near3(p.body.pos, qq->body.pos, kMeleeDistance)) continue;
             hit(*qq, 34, &p, kMeleeKill);
@@ -2322,8 +2934,14 @@ struct Server::Impl {
             if (p.body.pos.z > 64.0f || !finite3(p.body.pos)) kill(p, nullptr, kFallKill);
         }
         if (aim_mode()) aim_tick(dt);
-        else if (horde_mode()) horde_tick();
-        else tutorial_tick();
+        else if (horde_mode()) {
+            horde_tick();
+            // The guns' own beat, after the horde's, so a scan never
+            // looks at a wave before the wave takes its step.
+            turret_tick();
+        } else {
+            tutorial_tick();
+        }
         for (size_t i = 0; i < grenades.size();) {
             if (world_time >= grenades[i].explode_at) {
                 const Grenade g = grenades[i];
@@ -2410,9 +3028,10 @@ struct Server::Impl {
                 p.client_info = true;
                 // Offered: kick reasons, Teamplay, the lights (flashlights and
                 // the time of day), message types, the outfits and the smoke -
-                // the smoke at its second version, whose paths draw a way in
-                // whole, so a client that knows them is never sent vapour it
-                // does not need.
+                // the smoke at its third version, whose paths draw a way in
+                // whole and whose sentry guns are said over their own blocks,
+                // so a client that knows them is sent neither vapour it does
+                // not need nor a pillar without its works.
                 ByteWriter bw;
                 bw.write_u8(static_cast<uint8_t>(PacketId::ExtensionInfo));
                 bw.write_u8(7);
@@ -2429,7 +3048,7 @@ struct Server::Impl {
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::PlayerOutfit));
                 bw.write_u8(1);
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::Smoke));
-                bw.write_u8(2);   // the ways in drawn as paths, not beds alone
+                bw.write_u8(3);   // paths that draw a way in, sentry guns over their blocks
                 send(p, bw);
             } break;
             case PacketId::ExtensionInfo: {
@@ -2483,6 +3102,21 @@ struct Server::Impl {
                 // and is owed the beds no more; one that claimed v1 is
                 // served the vapour as it always was.
                 p.ext_trail = m.version_of(proto::Extension::Smoke) >= 2;
+                // The sentry guns are the same extension's third word: a
+                // client that claimed v3 draws the works over the blocks
+                // itself. It is told the whole set of them for the claim -
+                // held for it if it is still loading - and whichever state
+                // later, the same five-second whole the paths are refreshed
+                // on and at once whenever it changes, so a client that
+                // finished loading mid-game is never left staring at guns
+                // it cannot see.
+                p.ext_turrets = m.version_of(proto::Extension::Smoke) >= 3;
+                if (p.ext_turrets && !turrets.empty()) {
+                    ByteWriter guns;
+                    proto::write_turrets(guns, turret_state_now());
+                    if (p.loading) p.saved.push_back(guns.data);
+                    else send(p, guns);
+                }
             } break;
             case PacketId::Flashlight: on_flashlight(p, br); break;
             case PacketId::Teamplay: on_teamplay(p, br); break;
@@ -2850,7 +3484,11 @@ struct Server::Impl {
                 reset_run();
                 if (p.alive) spawn(p);
             } else if (text == "/clearwave" && horde_mode()) clear_wave();
-            else if (horde_mode()) system_chat("Commands here: /clearwave, /kill", p.id);
+            else if (horde_mode() &&
+                     (text.rfind("/turret", 0) == 0 || text.rfind("/sentry", 0) == 0)) {
+                turret_command(p, text);
+            } else if (horde_mode())
+                system_chat("Commands here: /clearwave, /kill, /turret", p.id);
             else system_chat(aim_mode() ? "Commands here: /restart, /kill"
                                         : "Commands here: /kill", p.id);
             return;
@@ -3026,6 +3664,10 @@ bool Server::start(std::string& err) {
             s.horde_cfg.spawn_x[k] = x;
             s.horde_cfg.spawn_y[k] = y;
         }
+        // The host's own word for the guns' tables, when it wrote one:
+        // horde.toml in the directory the server runs in, seen again at
+        // every start of a horde world.
+        s.load_turrets_tuning();
         s.build_core_column();
         s.map.to_solid_map(s.phys_map);
         s.horde = std::make_unique<horde::Horde>(s.phys_map, s.horde_cfg);

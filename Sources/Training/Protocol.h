@@ -261,6 +261,13 @@ void write_team_outfit(ByteWriter& bw, uint8_t team, uint8_t outfit);
 //   2  Path         S->C  id(1) r g b(1 each) count(1) then count points:
 //                     the first x/y/z as x(2) y(2) z(1), each later one as
 //                     dx dy dz(1 each, a byte of delta)
+//   3  Turrets      S->C  count(1) then count entries: id(1) level(1)
+//                     x(2) y(2) z(1) locked(1) yaw(1) pitch(1). The whole
+//                     set of placed sentry guns in one packet: the list
+//                     replaces whatever was said before it, and a gun no
+//                     longer listed is a gun no longer there.
+//   4  Turret Shot  S->C  id(1): this gun fired, the moment its damage
+//                     lands, so the flash and the fall are one thing
 //
 // A smoke the server puts in the world, in a colour, for a time: a wide
 // cloud on the ground, a thin rising column, or a heavy vapour that pools
@@ -276,7 +283,7 @@ void write_team_outfit(ByteWriter& bw, uint8_t team, uint8_t outfit);
 // bit 0 carries the hiss - a trail carries none, or the way in is a
 // racket rather than a marker. Only ever sent to a connection
 // that claimed the extension.
-enum class SmokeSub : uint8_t { Smoke = 0, Clear = 1, Path = 2 };
+enum class SmokeSub : uint8_t { Smoke = 0, Clear = 1, Path = 2, Turret = 3, TurretShot = 4 };
 enum class SmokeStyle : uint8_t { Cloud = 0, Column = 1, Ground = 2 };
 // The whole packet, id included: one smoke started.
 void write_smoke(ByteWriter& bw, uint8_t id, SmokeStyle style, const struct Vec3& origin,
@@ -301,5 +308,32 @@ struct PathPoint {
 // Empty points: the id's path taken away.
 void write_path(ByteWriter& bw, uint8_t id, uint8_t r, uint8_t g, uint8_t b,
                 const std::vector<PathPoint>& points);
+
+// One placed sentry gun on the wire: its own id, its level, the lower
+// pillar block it is anchored on (the upper pillar block is that z - 1),
+// whether it is firing at something, and the aim the server holds over it.
+// The aim is quantized as the smoke buries it here so a client needs no
+// other word to draw its works: yaw_pack[1] counts 128 steps round the
+// circle from +Y, positive toward +X (round((atan2(dx, dy) degrees +
+// 180) * 128 / 360) and 127), pitch[1] counts 127 steps over the -80 of
+// full climb to the +80 of full descent, dz = the target minus the works
+// and smaller z the higher, the same as everywhere here (round((pitch
+// degrees + 80) * 127 / 160), clamped to 0..127).
+struct TurretState {
+    uint8_t id = 0;              // the wire's own name for it, 1..255
+    uint8_t level = 0;           // 1..3
+    int16_t x = 0, y = 0;        // the pillar's LOWER block
+    uint8_t z = 0;               // its z (smaller z = higher, as everywhere here)
+    uint8_t locked = 0;          // 1 while the gun is firing at a target
+    uint8_t yaw_pack = 0;        // the aim, quantized as above
+    uint8_t pitch_pack = 0;
+};
+// The whole packet, id included: the whole set of guns replaced. Entries
+// past 255 are clipped, which no world of guns a server means to defend
+// its core with is going to reach; a count of 0 simply says none stand.
+void write_turrets(ByteWriter& bw, const std::vector<TurretState>& turrets);
+// The whole packet, id included: one gun's shot, sent the tick its damage
+// lands. Only ids that were in the last Turrets list, ever.
+void write_turret_shot(ByteWriter& bw, uint8_t turret_id);
 
 } // namespace proto

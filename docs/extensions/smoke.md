@@ -7,7 +7,7 @@ colour and an opacity, of a size, for a time.
 | ------------: | ------------- |
 | Extension ID: | `0x3F`        |
 | Packet ID:    | `0x7F`        |
-| Version:      | 2             |
+| Version:      | 3             |
 | Type:         | `HAS_PACKETS` |
 
 Written in the style of [aosprotocol](https://github.com/zerospades/aosprotocol)'s
@@ -21,6 +21,8 @@ every id registered or proposed in aosprotocol as of 13 November 2026.
 | 0      | Smoke       | Server -> Client | 25   |
 | 1      | Clear Smoke | Server -> Client | 3    |
 | 2      | Path        | Server -> Client | 11 + 3 n |
+| 3      | Turrets     | Server -> Client | 3 + 9 n |
+| 4      | Turret Shot | Server -> Client | 3    |
 
 ## What smoke is
 
@@ -87,6 +89,8 @@ unknown sub packet, so a server may send both kinds and let each client
 take what it understands - or, as ZeroSpades X's server does, sort its
 players by the version they claimed and send Path to those with `2`, the
 three-sub-packet Smoke, and the beds of Ground smoke to the rest.
+Version 3 adds the sentry guns, sub packets 3 and 4, on the same
+understanding: a client of an older version ignores them.
 
 | Field Name    | Field Type    | Example  | Notes |
 |---------------|---------------|----------|-------|
@@ -131,6 +135,54 @@ id and `Count` `0` takes it away, or the map changes; a player who joins
 mid-game sees no path until the server sends it again, which it should do
 every few seconds, since the packets are small enough to repeat.
 
+## Sub ID 3: Turrets
+
+Version 3 of the extension. The whole set of the server's sentry guns,
+said at once: a Turrets packet replaces everything a client knows about
+them, so what is not in the list is not standing. To the game itself a
+gun is two real map blocks, built by the server and torn down like any
+wall; this packet draws the works over them, so a client of the horde's
+own fork sees a machine gun and its aim where others see a coloured
+pillar. A client without version 3 plays against the pillar alone, which
+is already a whole game: the blocks are really there, the damage behind
+them is really dealt.
+
+| Field Name    | Field Type    | Example  | Notes |
+|---------------|---------------|----------|-------|
+| Packet ID     | UByte         | `0x7F`   | Always `0x7F`. |
+| Sub Packet ID  | UByte         | `3`      | Always `3` for this sub-packet. |
+| Count         | UByte         | `2`      | How many guns stand, `0`-`255`. `0` takes them all away. |
+| Turret ID     | UByte         | `4`      | The server's name for the gun, `1`-`255`, never `0`. |
+| Level         | UByte         | `1`      | `1`-`3`: which machine gun the works are. Decides the colour of the pillar drawn under them. |
+| X             | LE Short      | `128`    | The gun's own column, in world cells. |
+| Y             | LE Short      | `-3`     | |
+| Z             | UByte         | `32`     | The pillar's LOWER block; the upper is Z - 1. As everywhere, Z grows downwards. |
+| Locked        | UByte         | `1`      | `1` if the gun is on a walker, `0` if it sweeps. |
+| Yaw           | UByte         | `64`     | The aim's bearing, quantized: `round((degrees + 180) * 128 / 360) & 127`. |
+| Pitch         | UByte         | `85`     | The aim's climb, quantized: `clamp(round((degrees + 80) * 127 / 160), 0, 127)`; degrees negative up, as everywhere. |
+
+Each gun is 9 bytes, so the packet is `3 + 9 Count` bytes long. The first
+packet a client that claimed version 3 receives holds the whole set as it
+stands; after that a new packet is owed whenever the set changes (placed,
+raised, dug out, aimed) and whole again every few seconds whatever
+happened, so a client that finished loading mid-game is never left staring
+at guns it cannot see - the same rhythm the paths are refreshed on.
+
+A gun stays until it appears in a later list or does not: there is no
+remove sub-packet, no take-away id, only the whole truth again.
+
+## Sub ID 4: Turret Shot
+
+One gun's shot, said at the moment its damage lands, so every client of
+version 3 hears the gun the same instant and sees where it was aiming
+when it fired.
+
+| Field Name    | Field Type    | Example  | Notes |
+|---------------|---------------|----------|-------|
+| Packet ID     | UByte         | `0x7F`   | Always `0x7F`. |
+| Sub Packet ID | UByte         | `4`      | Always `4` for this sub-packet. |
+| Turret ID     | UByte         | `4`      | The gun that fired. |
+
 ## Examples
 
 A smoke screen, 10 s, grey, with the hiss:
@@ -146,6 +198,14 @@ A green marker column over a supply drop, two minutes, cleared when taken:
 An orange way in, five waypoints, path 2:
 
     7F 02  02  FF A0 00  05  88 00... (first X/Y/Z) <15 deltas>
+
+One level-2 gun, id 7, stood at (64, 32, 40) and locked on a walker:
+
+    7F 03  01  07 02  40 00  20 00  28  01  43  55
+
+That gun firing, twice a second while it holds its aim:
+
+    7F 04  07  (and again, each shot its own packet)
 
 ## Later
 

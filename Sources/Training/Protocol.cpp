@@ -296,4 +296,30 @@ void write_path(ByteWriter& bw, uint8_t id, uint8_t r, uint8_t g, uint8_t b,
     }
 }
 
+void write_turrets(ByteWriter& bw, const std::vector<TurretState>& turrets) {
+    bw.write_u8(static_cast<uint8_t>(PacketId::Smoke));
+    bw.write_u8(static_cast<uint8_t>(SmokeSub::Turret));
+    // A pack past the byte is the pack it is sent as: a world with that
+    // many guns defending one core has other problems first.
+    const uint8_t count = static_cast<uint8_t>(turrets.size() > 255 ? 255 : turrets.size());
+    bw.write_u8(count);
+    for (uint8_t k = 0; k < count; ++k) {
+        const TurretState& t = turrets[k];
+        bw.write_u8(t.id);
+        bw.write_u8(t.level);
+        bw.write_u16(static_cast<uint16_t>(t.x));
+        bw.write_u16(static_cast<uint16_t>(t.y));
+        bw.write_u8(t.z);
+        bw.write_u8(t.locked);
+        bw.write_u8(t.yaw_pack);
+        bw.write_u8(t.pitch_pack);
+    }
+}
+
+void write_turret_shot(ByteWriter& bw, uint8_t turret_id) {
+    bw.write_u8(static_cast<uint8_t>(PacketId::Smoke));
+    bw.write_u8(static_cast<uint8_t>(SmokeSub::TurretShot));
+    bw.write_u8(turret_id);
+}
+
 } // namespace proto

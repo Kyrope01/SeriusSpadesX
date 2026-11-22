@@ -1,0 +1,27 @@
+# The horde's own tables, read by the server at every start of a horde
+# world, from the directory the server runs in. A line the file does not
+# know how to say is skipped; a key it does not know is skipped; the file
+# itself is optional - without it the guns stand on the defaults below,
+# the numbers the fork grew up with. Comments run from # or ; to the end
+# of the line. Sections are named in [brackets]; what the server reads
+# today is [turrets]. Values are numbers, or lists of numbers in
+# brackets, one entry per sentry level, level 1 to 3.
+
+[turrets]
+
+# How far a gun's works reach, in blocks (8 foot cubes).
+range = 48.0
+
+# How often a gun looks around for a walker in reach, in seconds.
+scan_interval = 0.25
+
+# How far from the builder's own eye a block may stand to be named the
+# ground of a gun, in blocks.
+place_range = 8.0
+
+# The damage of one shot, by level. Level 3 is the low, fast gun:
+# its single shot is small, its rate is not.
+damage = [20, 25, 10]
+
+# The seconds between shots, by level.
+interval = [0.5, 0.4, 0.15]

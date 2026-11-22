@@ -30,6 +30,7 @@
 #include "Client.h"
 #include "IAudioDevice.h"
 #include "NetProtocol.h"
+#include "SentryEntity.h"
 #include "SmokeSpriteEntity.h"
 #include <Core/Debug.h>
 #include <Core/Settings.h>
@@ -262,6 +263,46 @@ namespace spades {
 					}
 					client.SetTrailPath(static_cast<std::uint8_t>(front),
 					                     MakeVector3(cr, cg, cb), std::move(pts));
+				} break;
+				case SmokeRegistry::kSubTurret: {
+					// count then each gun as 9 bytes: id level, x y as
+					// i16, z as u8, locked, the quantized aim. The
+					// whole set of the server's guns, replacing
+					// everything sent before: count 0 is a whole truth
+					// too - none are standing.
+					if (r.GetNumRemainingBytes() < 1) {
+						SPLog("Dropped a Turrets of the wrong size");
+						return;
+					}
+					const int count = r.ReadByte();
+					if (r.GetNumRemainingBytes() < 9 * count) {
+						SPLog("Dropped a Turrets truncated in the middle of its guns");
+						return;
+					}
+					std::vector<ServerTurret> guns;
+					guns.reserve(count);
+					for (int k = 0; k < count; ++k) {
+						ServerTurret t;
+						t.id = static_cast<std::uint8_t>(r.ReadByte());
+						t.level = static_cast<std::uint8_t>(r.ReadByte());
+						t.x = static_cast<int16_t>(r.ReadShort());
+						t.y = static_cast<int16_t>(r.ReadShort());
+						t.z = r.ReadByte();
+						t.locked = (r.ReadByte() & 1) != 0;
+						t.yaw_pack = static_cast<std::uint8_t>(r.ReadByte());
+						t.pitch_pack = static_cast<std::uint8_t>(r.ReadByte());
+						guns.push_back(t);
+					}
+					client.ApplyTurrets(std::move(guns));
+				} break;
+				case SmokeRegistry::kSubTurretShot: {
+					// one id, the gun that fired, at the tick the shot
+					// landed: the tracer, the flash, the report
+					if (r.GetNumRemainingBytes() < 1) {
+						SPLog("Dropped a Turret Shot of the wrong size");
+						return;
+					}
+					client.ServerTurretFired(static_cast<std::uint8_t>(r.ReadByte()));
 				} break;
 				default:
 					SPLog("Ignoring an unknown Smoke sub packet %d", sub);

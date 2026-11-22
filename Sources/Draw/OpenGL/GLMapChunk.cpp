@@ -213,8 +213,17 @@ namespace spades {
 			x &= 511;
 			y &= 511;
 
-			return map->IsSolid(x, y, (z == 63)
-				? (renderer.renderer.GetSettings().r_water ? 62 : 63) : z);
+			// A hidden block is nothing to the eye of the render: the
+			// sentry models draw over the pillar their two real blocks
+			// stand for, so the mesh leaves the blocks out - and the
+			// faces of the neighbours the pillar covered come back,
+			// the same as if the blocks had been dug away, while the
+			// game itself keeps the solid: rays and bodies and the
+			// spade all still meet the pillar the model seats on.
+			const int zz = (z == 63) ? (renderer.renderer.GetSettings().r_water ? 62 : 63) : z;
+			if (map->IsHidden(x, y, zz))
+				return false;
+			return map->IsSolid(x, y, zz);
 		}
 
 		void GLMapChunk::Update() {

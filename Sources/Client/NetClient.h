@@ -121,9 +121,10 @@ namespace spades {
 			  {ExtensionTypePieMenu, 1},
 			  {ExtensionTypePlayerOutfit, 1},
 			  {ExtensionTypeCompactWorldUpdate, 1},
-			  // Version 2 adds the Path sub packet: a way in drawn by this
-			  // client itself as a line, cheaper and longer than its beds.
-			  {ExtensionTypeSmoke, 2},
+			  // Version 3 adds the Turrets and Turret Shot sub
+			  // packets: the server's sentry guns drawn as models by
+			  // this client, version 2 the paths, version 1 the beds.
+			  {ExtensionTypeSmoke, 3},
 			  {ExtensionTypePlayerLimit, 1},
 			  {ExtensionTypeMessageTypes, 1},
 			  {ExtensionTypeKickReason, 1}};

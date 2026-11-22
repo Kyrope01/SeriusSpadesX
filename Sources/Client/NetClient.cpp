@@ -42,6 +42,7 @@
 #include "Teamplay.h"
 #include "PlayerOutfit.h"
 #include "PieMenuView.h"
+#include "SentryEntity.h"
 #include "Weapon.h"
 #include "World.h"
 #include <Core/CP437.h>
@@ -2013,6 +2014,12 @@ namespace spades {
 		void NetClient::SendChat(std::string text, bool global) {
 			SPADES_MARK_FUNCTION();
 
+			// the fork's local toy commands (/turretlocal, /sentrylocal)
+			// are not the server's to hear: drawn, spawned and fired by
+			// this client alone, never a byte on the wire
+			if (client && SentryEntity::TryLocalCommand(*client, text))
+				return;
+
 			NetPacketWriter w(PacketTypeChatMessage);
 			w.WriteByte((uint8_t)GetLocalPlayer().GetId());
 			w.WriteByte((uint8_t)(global ? 0 : 1));
@@ -2023,6 +2030,11 @@ namespace spades {
 
 		void NetClient::SendChatUTF8(const std::string& text, bool global) {
 			SPADES_MARK_FUNCTION();
+
+			// the local toy commands stay local here too, whatever their
+			// colour codes
+			if (client && SentryEntity::TryLocalCommand(*client, text))
+				return;
 
 			// Only printable ASCII reads the same in CP437 and UTF-8: a control byte
 			// is a symbol in CP437 but a colour code in UTF-8, so a line holding one

@@ -48,6 +48,13 @@ namespace spades {
 		 *     2  Path         S->C  id(1) r g b(1 each) count(1) then the way
 		 *                           as its turns: the first x y z as x(2) y(2)
 		 *                           z(1), each later one a byte of delta apiece
+		 *     3  Turrets      S->C  count(1) then each gun as 9 bytes:
+		 *                           id(1) level(1) x(2) y(2) z(1) locked(1)
+		 *                           yaw(1) pitch(1). The whole set of the
+		 *                           server's sentry guns, replacing everything
+		 *                           sent before: what this list does not name
+		 *                           is not standing.
+		 *     4  Turret Shot  S->C  id(1), at the very tick the shot lands
 		 */
 		struct SmokeParams {
 			// 0 spreads as a wide cloud, 1 rises as a thin column, 2 gathers
@@ -96,10 +103,13 @@ namespace spades {
 			static constexpr std::uint8_t kPacketId = 64 + kExtensionId;
 			static constexpr std::uint8_t kSubSmoke = 0;
 			static constexpr std::uint8_t kSubClear = 1;
-			/** Version 2 of the extension: the same negotiation, one more
-			 * sub packet, the paths a v1 client ignores on arrival. */
-			static constexpr std::uint8_t kVersion = 2;
+			/** Version 3 of the extension: the same negotiation, the
+			 * sentry guns carried on two more sub packets - a Turrets
+			 * list a v2 client ignores on arrival, and its shots. */
+			static constexpr std::uint8_t kVersion = 3;
 			static constexpr std::uint8_t kSubPath = 2;
+			static constexpr std::uint8_t kSubTurret = 3;
+			static constexpr std::uint8_t kSubTurretShot = 4;
 
 			/** The stop flag for a new smoke; an id in use stops the old one. */
 			std::shared_ptr<bool> Start(int id);

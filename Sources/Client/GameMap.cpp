@@ -45,6 +45,7 @@ namespace spades {
 			for (int x = 0; x < DefaultWidth; x++)
 			for (int y = 0; y < DefaultHeight; y++) {
 				solidMap[x][y] = 1; // ground only
+				hiddenMap[x][y] = 0;
 				for (int z = 0; z < DefaultDepth; z++) {
 					uint32_t col = GetDirtColor(x, y, z);
 					colorMap[x][y][z] = swapColorMap(col);
@@ -57,7 +58,33 @@ namespace spades {
 			Handle<GameMap> copy{new GameMap(NoInit{})};
 			memcpy(copy->solidMap, solidMap, sizeof(solidMap));
 			memcpy(copy->colorMap, colorMap, sizeof(colorMap));
+			memcpy(copy->hiddenMap, hiddenMap, sizeof(hiddenMap));
 			return copy;
+		}
+
+		// The hidden flag is told to the listeners the way an edited block
+		// is: the renderer redraws the chunk of a hidden block as it redraws
+		// a changed one, and the neighbours' faces it uncovers with it. The
+		// map itself does not change: IsSolid keeps its word, the hidden
+		// block is a wall to the game and nothing to the eye.
+		void GameMap::SetHidden(int x, int y, int z, bool hidden) {
+			SPAssert(IsValidMapCoord(x, y, z));
+
+			uint64_t mask = 1ULL << z;
+			uint64_t value = GetHiddenMap(x, y);
+			const bool was = (value & mask) != 0ULL;
+			if (was == hidden)
+				return;
+
+			if (hidden)
+				value |= mask;
+			else
+				value &= ~mask;
+			hiddenMap[x][y] = value;
+
+			std::lock_guard<std::mutex> guard{listenersMutex};
+			for (auto* l : listeners)
+				l->GameMapChanged(x, y, z, this);
 		}
 
 		void GameMap::AddListener(spades::client::IGameMapListener* l) {

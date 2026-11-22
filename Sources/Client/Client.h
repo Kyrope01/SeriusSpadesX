@@ -65,6 +65,7 @@ namespace spades {
 	namespace client {
 		class IRenderer;
 		struct SceneDefinition;
+		struct ServerTurret; // SentryEntity.h: the wire's own sentry gun
 		class GameMap;
 		class GameMapWrapper;
 		class World;
@@ -1220,6 +1221,15 @@ namespace spades {
 			void SetTrailPath(std::uint8_t front, const Vector3& color,
 			                  std::vector<Vector3> points);
 			void ClearTrailPath(std::uint8_t front) { trails.Forget(front); }
+
+			/** The Smoke extension, version 3: the server's sentry guns
+			 * applied whole - what the list does not name is not
+			 * standing - and the report of one of them firing, at the
+			 * tick the damage lands. Only drawn; whether the guns hit,
+			 * what they hit and when is the server's own. Defined in
+			 * SentryEntity.cpp, like StartSmoke's half of this. */
+			void ApplyTurrets(std::vector<ServerTurret> guns);
+			void ServerTurretFired(std::uint8_t id);
 
 			/** The model sets the Player Models extension has assigned. */
 			const PlayerOutfits& GetPlayerOutfits() const { return playerOutfits; }

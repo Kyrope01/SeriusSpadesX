@@ -78,6 +78,21 @@ namespace spades {
 				return GetSolidMap(x & (Width() - 1), y & (Height() - 1));
 			}
 
+			/**
+			 * A hidden block: solid to the eye of the game - solid, hit by
+			 * rays, buildable on, destructible - and never drawn by the map's
+			 * own renderer. The sentry guns seat their models over a pillar
+			 * of two real blocks and hide the blocks, so the animated model
+			 * is all that is drawn while the world still collides with the
+			 * pillar it stands for.
+			 */
+			inline uint64_t GetHiddenMap(int x, int y) const { return hiddenMap[x][y]; }
+			inline bool IsHidden(int x, int y, int z) const {
+				SPAssert(IsValidMapCoord(x, y, z));
+				return ((GetHiddenMap(x, y) >> (uint64_t)z) & 1ULL) != 0ULL;
+			}
+			void SetHidden(int x, int y, int z, bool hidden);
+
 			inline bool IsSolid(int x, int y, int z) const {
 				SPAssert(IsValidMapCoord(x, y, z));
 				return ((GetSolidMap(x, y) >> (uint64_t)z) & 1ULL) != 0;
@@ -229,6 +244,8 @@ namespace spades {
 			explicit GameMap(NoInit) {}
 
 			uint64_t solidMap[DefaultWidth][DefaultHeight];
+			// one bit per z of the column: see IsHidden
+			uint64_t hiddenMap[DefaultWidth][DefaultHeight];
 			uint32_t colorMap[DefaultWidth][DefaultHeight][DefaultDepth];
 			std::list<IGameMapListener*> listeners;
 			std::mutex listenersMutex;

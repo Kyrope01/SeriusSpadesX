@@ -30,6 +30,7 @@
 #include <Core/Settings.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace spades {
@@ -53,6 +54,10 @@ namespace spades {
 	// crumbs also ghost through the terrain, a way in underground read
 	// from above it. Doubles the crumbs drawn; off by default.
 	DEFINE_SPADES_SETTING(cg_hordeTrailThrough, "0");
+	// The pace the ways walk, in lengths a second: a crumb reaches its
+	// neighbour's place once a period, and the line reads as what it
+	// stands for - the wave, coming in. 0 and the ways stand still.
+	DEFINE_SPADES_SETTING(cg_hordeTrailFlow, "1.0");
 
 	void TrailLayer::SetPath(uint8_t front, const Vector3& color, std::vector<Vector3> crumbs) {
 		if (paths.size() <= front)
@@ -99,6 +104,16 @@ namespace spades {
 		const float opacity =
 		  std::max(0.05F, std::min(1.0F, static_cast<float>(cg_hordeTrailOpacity)));
 		const bool through = (int)cg_hordeTrailThrough != 0;
+		const float flow = std::max(0.0F, static_cast<float>(cg_hordeTrailFlow));
+
+		// The clock the ways walk by is this side's own: no packet and no
+		// server keeps it, for the walk is a look alone - the line means
+		// the same whether drawn, thinned or not drawn at all.
+		static const std::chrono::steady_clock::time_point walkStart =
+		  std::chrono::steady_clock::now();
+		const float now =
+		  std::chrono::duration<float>(std::chrono::steady_clock::now() - walkStart)
+		    .count();
 
 		ModelRenderParam param;
 		param.ghost = true;            // no shading, no shadow: a marker, flat
@@ -111,40 +126,101 @@ namespace spades {
 		const float scale = size / 3.0F;
 
 		int budget = kMaxCrumbs;
-		for (const Path& p : paths) {
+		for (size_t front = 0; front < paths.size(); front++) {
+			const Path& p = paths[front];
 			if (p.crumbs.empty())
 				continue;
 			param.customColor = p.color;
 			param.xrayColor = p.color;
+
+			// One way's own beat. A line reads as a line only walking
+			// whole, so one front's crumbs lock step with one another;
+			// but two ways sharing a ground - a crossing, a stair, a run
+			// laid over a run - walk their own rounds out of step with
+			// each other, their own drum and their own downbeat, and
+			// the eye parts them the way it parts two voices in a song.
+			// Stood back in step, they would read as one broad way.
+			float u = 0.0F;
+			if (flow > 0.0F) {
+				const float drum =
+				  1.0F + 0.13F * std::sin(2.399F * static_cast<float>(front));
+				u = std::fmod(now * flow * drum + 0.618F * static_cast<float>(front),
+				              1.0F);
+			}
 
 			// The line walked, a crumb a step and a step stretching with
 			// distance: the crumbs near the eye tell the way to the
 			// doorstep, the crumbs far out hint it, the crumbs past the
 			// fog are not drawn at all.
 			const std::vector<Vector3>& crumbs = p.crumbs;
+			const size_t last = crumbs.size() - 1;
 			size_t i = 0;
+			bool drewAny = false;
+			Vector3 first(0.0F, 0.0F, 0.0F);
+			Vector3 drawn(0.0F, 0.0F, 0.0F);
 			while (i < crumbs.size() && budget > 0) {
 				const Vector3& c = crumbs[i];
 				const float distSq = (viewOrigin - c).GetSquaredLength();
 				if (distSq < FOG_DISTANCE_SQ) {
-					param.matrix = Matrix4::Translate(c) * Matrix4::Scale(scale);
-					renderer.RenderModel(*model, param);
-					--budget;
-
-					// The spacing, stretched by how far out this crumb
-					// fell: twice the setting at the fog, the setting at
-					// the eye.
 					const float dist = std::sqrt(distSq);
 					int stride =
 					  static_cast<int>(spacing * (1.0F + dist / 128.0F) + 0.5F);
 					if (stride < 1)
 						stride = 1;
+
+					// Where this crumb stands while the way walks: its
+					// place slid along the line by this frame's share of
+					// a period, carried between crumbs by the way's own
+					// floor - the march rides the ground the line rides,
+					// keeps its turns, and the two ends of the way
+					// stand still however long the middle walks.
+					const float slide = u * static_cast<float>(stride);
+					const size_t m = std::min(i + static_cast<size_t>(slide), last);
+					const size_t n = std::min(m + 1, last);
+					const float f = slide - static_cast<float>(static_cast<size_t>(slide));
+					const Vector3 pos = crumbs[m] + (crumbs[n] - crumbs[m]) * f;
+
+					param.matrix = Matrix4::Translate(pos) * Matrix4::Scale(scale);
+					renderer.RenderModel(*model, param);
+					--budget;
+					if (!drewAny)
+						first = pos;
+					drawn = pos;
+					drewAny = true;
+
+					// The spacing, stretched by how far out this crumb
+					// fell: twice the setting at the fog, the setting at
+					// the eye. Each dot slides over exactly the gap it
+					// keeps, so when a period turns and every dot steps
+					// back to its own place, each had reached its
+					// neighbour's - the same line by another dot, a
+					// wrap the eye cannot catch.
 					i += static_cast<size_t>(stride);
 				} else {
 					// Out past the fog: skip ahead in spans of the fog
 					// itself rather than a crumb at a time it will not draw.
 					i += 32;
 				}
+			}
+
+			// The door the way came in by: once the first walking dot
+			// has left it, an anchored crumb stands on it - a defender
+			// reads the way by where it starts, and the start does not
+			// wander with the walk.
+			if (drewAny && budget > 0 && crumbs.size() > 1 &&
+			    (crumbs[0] - first).GetSquaredLength() > 0.25F) {
+				param.matrix = Matrix4::Translate(crumbs[0]) * Matrix4::Scale(scale);
+				renderer.RenderModel(*model, param);
+				--budget;
+			}
+			// The wave's own head, the far end of its way: whatever the
+			// stride skipped or the slide carried, the front itself
+			// stands marked - the dot to watch, the rest the road to it.
+			if (drewAny && budget > 0 &&
+			    (crumbs[last] - drawn).GetSquaredLength() > 0.25F) {
+				param.matrix = Matrix4::Translate(crumbs[last]) * Matrix4::Scale(scale);
+				renderer.RenderModel(*model, param);
+				--budget;
 			}
 		}
 	}

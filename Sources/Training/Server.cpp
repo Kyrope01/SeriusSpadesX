@@ -86,6 +86,28 @@ constexpr double kPounceAgain = 1.2;     // and this long between two of them
 // seconds of going nowhere by the field's own count, and the hop and
 // the fling the standstill gets are let loose again.
 constexpr int kZombieYoyoWindows = 6;
+// The stuck head's licence: the shortcut gate the spade's worth is
+// measured by is a frugal one - a hundred steps of detour before the
+// wall comes down - and a maze of short walls is a town of detours
+// too brief for it, so the pack that faces one paces and hops and
+// never draws the spade at all. A head stuck past its windup, and not
+// resting on the spade's own cadence at a wall it is already opening,
+// owes the licence anyway: the gate opens, and the crossing the spade's
+// field names is opened in turn, wall or ceiling, top down at the
+// dig's own pace.
+constexpr double kStuckDigWindup = 3.0;
+// A leader stalled this long - stuck past the windup, and not already
+// swinging at a wall it is opening for the line - loses its line for
+// a while: a follower owed prints it cannot walk reads the field for
+// itself and walks its own way down, maze street or loop, whatever the
+// walk prices cheapest, so one stuck head cannot stack the wave behind
+// its standstill. It is the way down the field, never the air's own
+// bearing, that the strayed walk - so a walk through a maze loop moves
+// away from the core in steps and nearer in the only count that
+// matters, the walk's own. The line knits itself again where the
+// prints and the chase resume: only the head keeps the spade, one
+// breach a crossing as it always was.
+constexpr double kStuckHeadDisband = 6.0;
 // The beat the way in's vapour is laid afresh on: the reading re-read,
 // the beds re-said, an obstacle answered within the beat - the trail
 // follows the ground, and the ground is moved on while the walk is on.
@@ -2221,13 +2243,25 @@ struct Server::Impl {
     // stroke, until the fall stands in honest air and the body takes it.
     // False when the licence is off, the walker
     // is aloft, the dig walk is silent, or the legs' way is nearly as
-    // soon; the walker is left to the legs' own answers.
+    // soon; the walker is left to the legs' own answers. Stuck past a
+    // windup, the head earns the licence anyway: a wall faced long
+    // enough is worth the spade whatever the detour it saves.
     bool dig_lead(Player& p, bool leg_led) {
         if (!horde_mode() || !horde_cfg.dig || p.body.airborne) return false;
         const int cx = static_cast<int>(std::floor(p.body.pos.x));
         const int cy = static_cast<int>(std::floor(p.body.pos.y));
         const int fz = static_cast<int>(std::floor(p.body.pos.z + 2.25f));
-        if (leg_led && !horde->dig_worth(cx, cy, fz)) return false;
+        // The stuck head's licence: worth is a frugal gate - a hundred
+        // steps of detour saved before the spade draws - and the maze
+        // of short walls never owes that much. A head stuck past the
+        // windup, and not resting on the spade's own cadence at a wall
+        // it already opens, is granted the licence anyway: whatever
+        // the detour saves, the wall in its face comes down.
+        const bool stuck_licence = p.stuck_at >= 0.0 &&
+                                   world_time - p.stuck_at >= kStuckDigWindup &&
+                                   world_time - p.spade_at >= horde_cfg.dig_seconds;
+        if (leg_led && !horde->dig_worth(cx, cy, fz) && !stuck_licence)
+            return false;
         int tx = cx, ty = cy, tz = fz;
         if (!horde->next_dig_step(cx, cy, fz, tx, ty, tz)) return false;
         const float dx = static_cast<float>(tx) + 0.5f - p.body.pos.x;
@@ -2377,8 +2411,20 @@ struct Server::Impl {
             // field instead, the walk the whole of it shares, never the
             // open air's own bearing, and the corridor it marches is the
             // one the line marches: the nearest print ahead stands
-            // unmasked, and the chase resumes on its own.
-            bool strayed = print < 0 && l > leash;
+            // unmasked, and the chase resumes on its own. And the head
+            // stalled loses its line for a while the same way: stuck
+            // past the disband's own patience and not swinging at a
+            // wall it already opens for the line, it owes prints it
+            // cannot walk, and the follower reads the field for itself,
+            // a way down of its own rather than a place in a standstill
+            // that never ends - the field's way out of a maze loop
+            // steps away from the core and nearer all the while, the
+            // walk's count being steps, not miles.
+            const bool head_disbanded =
+                ahead->stuck_at >= 0.0 &&
+                world_time - ahead->stuck_at >= kStuckHeadDisband &&
+                world_time - ahead->spade_at >= kStuckHeadDisband;
+            bool strayed = (print < 0 && l > leash) || head_disbanded;
             if (print >= 0 && !strayed) {
                 const float dx = ahead->heel_x[print] - p.body.pos.x;
                 const float dy = ahead->heel_y[print] - p.body.pos.y;
@@ -2752,6 +2798,17 @@ struct Server::Impl {
             if (!have_start && !horde->corner_anchor(corner, sx, sy)) continue;
             if (!horde->trace_route(sx, sy, fr.cells) && horde_cfg.dig)
                 horde->trace_dig(sx, sy, fr.cells);   // the sealed way in: over the walls it will take down
+            // The doorstep trimmed: the core's own column is where the
+            // way ends, not a tread of it. A line drawn onto the
+            // pillar's own edge wavered with every re-say of the
+            // marker it hung from, a jitter at the very door; the way
+            // in stops one block short instead, on the ground the
+            // walk itself stands on there - and the door it names is
+            // read as well from a steady line as from a wavering one.
+            while (!fr.cells.empty() &&
+                   fr.cells.back().x == horde_cfg.core_x &&
+                   fr.cells.back().y == horde_cfg.core_y)
+                fr.cells.pop_back();
             if (fr.cells.empty()) continue;
             fronts.push_back(std::move(fr));
         }

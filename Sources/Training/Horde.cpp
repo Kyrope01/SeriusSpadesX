@@ -1306,7 +1306,11 @@ void Horde::tick(double now) {
             break;
         case Phase::Wave:
             if (wave_cleared()) {
-                if (wave_ >= cfg_.wave_count_max) {
+                // 0 asks the impossible: no wave is the last, whatever
+                // clears another follows - the debugging season's own
+                // endless rain, at the count the world can no longer
+                // raise once the ramp has topped out.
+                if (cfg_.wave_count_max > 0 && wave_ >= cfg_.wave_count_max) {
                     phase_ = Phase::Victory;
                     break;
                 }

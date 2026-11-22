@@ -108,9 +108,14 @@ struct Config {
     // once kept, so the horde reads as one body rising and walking.
     double spawn_interval = 0.25;
     // The rounds keep coming while the ramp still has something new to
-    // show: eight waves never reached the ninth point, so twenty is the
-    // count now - the points all open by ten, and the packs grow on.
-    int wave_count_max = 20;
+    // show: the points all open by ten, and the packs grow on past the
+    // cap. While the debugging season runs the waves themselves NEVER
+    // end - 0: whatever falls, another wave stands up, the count riding
+    // its own ramp to the world's budget of the dead and holding there,
+    // the number it can no longer raise. A count above zero is the
+    // campaign back: that last wave, once cleared, is the Victory the
+    // balance phase will hand the game when the debugging is done.
+    int wave_count_max = 0;
     int core_hp = 150;
     // How much of the core's health a cleared wave mends back.
     int core_mend = 25;

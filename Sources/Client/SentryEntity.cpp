@@ -71,6 +71,22 @@ DEFINE_SPADES_SETTING(cg_sentry1Muzzle, "0.78"); // level-1 muzzle distance (fro
 DEFINE_SPADES_SETTING(cg_sentry2Muzzle, "1.5");  // level-2 (frozen 14 Nov)
 DEFINE_SPADES_SETTING(cg_sentry3Muzzle, "1.43"); // level-3 (frozen 14 Nov)
 DEFINE_SPADES_SETTING(cg_sentry3MuzzleZ, "0.43"); // level-3 muzzle vertical trim (frozen 14 Nov)
+// live muzzle seats, one triple per tier: X leans to the
+// barrel's right as the gun faces its aim, Y stretches the
+// reach past the frozen distance, Z is a world-vertical trim
+// (positive raises, the convention every seat here already
+// speaks). Defaults zero: the frozen seats above are exactly
+// what is drawn until a dial moves. Temporary calibration
+// knobs; the values that look right get frozen in their place.
+DEFINE_SPADES_SETTING(cg_sentry1MuzzleOffX, "0"); // tier-1 live seat
+DEFINE_SPADES_SETTING(cg_sentry1MuzzleOffY, "0");
+DEFINE_SPADES_SETTING(cg_sentry1MuzzleOffZ, "0");
+DEFINE_SPADES_SETTING(cg_sentry2MuzzleOffX, "0"); // tier-2 live seat
+DEFINE_SPADES_SETTING(cg_sentry2MuzzleOffY, "0");
+DEFINE_SPADES_SETTING(cg_sentry2MuzzleOffZ, "0");
+DEFINE_SPADES_SETTING(cg_sentry3MuzzleOffX, "0"); // tier-3 live seat
+DEFINE_SPADES_SETTING(cg_sentry3MuzzleOffY, "0");
+DEFINE_SPADES_SETTING(cg_sentry3MuzzleOffZ, "0");
 DEFINE_SPADES_SETTING(cg_sentryFlash, "1");       // muzzle flash dynamic light
 DEFINE_SPADES_SETTING(cg_sentryYawFix, "0");   // constant orientation fixes,
 DEFINE_SPADES_SETTING(cg_sentryPitchFix, "0"); // in the MODEL's local frame,
@@ -84,6 +100,7 @@ DEFINE_SPADES_SETTING(cg_sentry3BodyOffX, "-0.01");
 DEFINE_SPADES_SETTING(cg_sentry3BodyOffY, "0.25");
 DEFINE_SPADES_SETTING(cg_sentry3BodyOffZ, "-0.75");
 DEFINE_SPADES_SETTING(cg_sentry3BarrelScale, "0.65");
+DEFINE_SPADES_SETTING(cg_sentry3BarrelOffX, "0");    // live seat (calibration)
 DEFINE_SPADES_SETTING(cg_sentry3BarrelOffY, "-0.07");
 DEFINE_SPADES_SETTING(cg_sentry3BarrelOffZ, "0.57");
 //
@@ -112,6 +129,29 @@ namespace spades {
 				case 1:  return (float)cg_sentry1Muzzle;
 				case 2:  return (float)cg_sentry2Muzzle;
 				default: return (float)cg_sentry3Muzzle;
+			}
+		}
+
+		// The live seat of the tier's muzzle, the calibration triple
+		// every shot's show anchors to: X leans to the barrel's
+		// right, Y stretches the reach past the frozen distance, Z
+		// raises the muzzle in the world's own down-pointing z.
+		// Zero everywhere = the frozen seats alone, as drawn since
+		// November.
+		static Vector3 SentryMuzzleSeat(int level) {
+			switch (level) {
+				case 1:
+					return MakeVector3((float)cg_sentry1MuzzleOffX,
+					                   (float)cg_sentry1MuzzleOffY,
+					                   (float)cg_sentry1MuzzleOffZ);
+				case 2:
+					return MakeVector3((float)cg_sentry2MuzzleOffX,
+					                   (float)cg_sentry2MuzzleOffY,
+					                   (float)cg_sentry2MuzzleOffZ);
+				default:
+					return MakeVector3((float)cg_sentry3MuzzleOffX,
+					                   (float)cg_sentry3MuzzleOffY,
+					                   (float)cg_sentry3MuzzleOffZ);
 			}
 		}
 
@@ -740,6 +780,28 @@ namespace spades {
 			       MakeVector3(0.f, 0.f, 1.f) * sinf(currentPitch);
 		}
 
+		Vector3 SentryEntity::MuzzlePoint() const {
+			// One seat, read everywhere a shot shows: the tracer, the
+			// smoke, the puff and the flash all start from THIS
+			// point, so the gun reads as one piece however it turns.
+			// The frozen reach runs along the aim as ever; the live
+			// seat rides the gun's OWN frame (right = the render's
+			// own right axis, so a lean dialed in facing one way
+			// holds facing every way), and the Z of the seat is the
+			// world-vertical trim the frozen seats already speak -
+			// positive raises, whatever the pitch.
+			Vector3 seat = SentryMuzzleSeat(level);
+			Vector3 right = Vector3::Cross(HeadForward(),
+			                               MakeVector3(0.f, 0.f, 1.f)).Normalize();
+			Vector3 muzzle = HeadOrigin() +
+			                 AimForward() * (SentryMuzzleDistance(level) + seat.y) +
+			                 right * seat.x;
+			muzzle.z -= seat.z; // z is down: a positive seat raises
+			if (level == 3)
+				muzzle.z -= (float)cg_sentry3MuzzleZ; // z is down: raise
+			return muzzle;
+		}
+
 		Player *SentryEntity::FindTarget() {
 			World *world = client.GetWorld();
 			if (!world)
@@ -834,10 +896,7 @@ namespace spades {
 		void SentryEntity::Fire(Player &target) {
 			SPADES_MARK_FUNCTION();
 
-			Vector3 muzzle =
-			  HeadOrigin() + AimForward() * SentryMuzzleDistance(level);
-			if (level == 3)
-				muzzle.z -= (float)cg_sentry3MuzzleZ; // z is down: raise
+			Vector3 muzzle = MuzzlePoint();
 			Vector3 aimPoint =
 			  target.GetEye() + MakeVector3(0.f, 0.f, (float)cg_sentryAimBody);
 			Vector3 aim = aimPoint - muzzle;
@@ -847,10 +906,7 @@ namespace spades {
 		}
 
 		void SentryEntity::FireVisual(Vector3 aimDir) {
-			Vector3 muzzle =
-			  HeadOrigin() + AimForward() * SentryMuzzleDistance(level);
-			if (level == 3)
-				muzzle.z -= (float)cg_sentry3MuzzleZ;
+			Vector3 muzzle = MuzzlePoint();
 
 			// the endpoint: the first thing on the sight line (a wall, a
 			// player - the local player never blocks their own gun); no
@@ -1186,6 +1242,7 @@ namespace spades {
 					bodyOff.y = (float)cg_sentry3BodyOffY;
 					bodyOff.z = (float)cg_sentry3BodyOffZ;
 					barrelScale *= (float)cg_sentry3BarrelScale;
+					barrelOff.x = (float)cg_sentry3BarrelOffX;
 					barrelOff.y = (float)cg_sentry3BarrelOffY;
 					barrelOff.z = (float)cg_sentry3BarrelOffZ;
 				}
@@ -1223,10 +1280,7 @@ namespace spades {
 			if (flashTimer > 0.f && (float)cg_sentryFlash != 0.f) {
 				DynamicLightParam light;
 				light.type = DynamicLightTypePoint;
-				light.origin = HeadOrigin() +
-				               AimForward() * SentryMuzzleDistance(level);
-				if (level == 3)
-					light.origin.z -= (float)cg_sentry3MuzzleZ;
+				light.origin = MuzzlePoint();
 				light.radius = (float)cg_sentryFlashRadius * (flashTimer / FlashTime);
 				light.color = MakeVector3(1.0f, 0.8f, 0.5f);
 				r->AddLight(light);

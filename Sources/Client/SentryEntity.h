@@ -242,6 +242,13 @@ namespace spades {
 			Vector3 HeadOrigin() const;
 			Vector3 HeadForward() const; // horizontal, yaw only
 			Vector3 AimForward() const;  // yaw and pitch
+			/** The muzzle of the tier's own gun, the one point every
+			 * shot's show anchors to (tracer, smoke, puff, flash):
+			 * the head pivot plus the frozen reach, the level-3
+			 * world trim, and the live seat triple of the
+			 * cg_sentryNMuzzleOff* knobs (X leans to the barrel's
+			 * right, Y stretches the reach, Z raises). */
+			Vector3 MuzzlePoint() const;
 			void Fire(Player &target);   // the local mode's shot
 		};
 	} // namespace client

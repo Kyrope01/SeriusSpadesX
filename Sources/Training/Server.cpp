@@ -675,11 +675,11 @@ struct Server::Impl {
     // and so is any key the host does not owe. Nothing is owed: a map
     // without the file, or without a key, keeps what it already stood on.
     // The core_position the vocabulary knows is a cell of the map, and it
-    // may name the floor besides: a third number is the ground cell the
-    // tool speaks in (the bedrock layer of a room inside the hill), and
-    // where the core stands at the map's own cell it is the floor the
-    // column rises from - get_z cannot read a room under a roof, it
-    // would name the hill above the core's head.
+    // may name the core's foot besides: a third number is the layer the
+    // bottom block of its column stands in (61, say, on the bedrock of a
+    // room inside the hill), and where the core stands at the map's own
+    // cell its column is two blocks from that layer - get_z cannot read
+    // a room under a roof, it would name the hill above the core's head.
     void read_map_settings(const std::string& text) {
         map_core_x = map_core_y = map_core_z = -1;
         if (text.empty()) return;
@@ -778,7 +778,8 @@ struct Server::Impl {
             }
         }
         if (map_core_x >= 0 && map_core_z >= 0)
-            log("map settings: core at %d, %d, floor %d", map_core_x, map_core_y, map_core_z);
+            log("map settings: core at %d, %d, foot layer %d",
+                map_core_x, map_core_y, map_core_z);
         else if (map_core_x >= 0)
             log("map settings: core at %d, %d", map_core_x, map_core_y);
         else
@@ -834,17 +835,19 @@ struct Server::Impl {
     // on top of it comes from StateData, and the dig and blast vetoes
     // below keep it standing.
     //
-    // Where the floor is named, the column rises from it instead and two
-    // blocks tall: the map's own z at the map's own cell (a room inside
-    // the hill, whose floor no get_z can read - it names the first solid
-    // from above, the hill itself), or the third number of a /core word.
-    void build_core_column(int floor_z = -1) {
+    // Where the foot is named, the column stands on the layer beneath it
+    // instead and two blocks tall: the map's own z at the map's own cell
+    // (a room inside the hill, whose floor no get_z can read - it names
+    // the first solid from above, the hill itself), or the third number
+    // of a /core word. The layer the word names is the core's own foot
+    // block, the bottom of its column; the rock below is its ground.
+    void build_core_column(int foot_z = -1) {
         const int x = horde_cfg.core_x, y = horde_cfg.core_y;
         int ground = 0;
-        if (floor_z >= 1 && floor_z <= 63) {
-            ground = floor_z;
-        } else if (x == map_core_x && y == map_core_y && map_core_z >= 1 && map_core_z <= 63) {
-            ground = map_core_z;
+        if (foot_z >= 1 && foot_z <= 62) {
+            ground = foot_z + 1;
+        } else if (x == map_core_x && y == map_core_y && map_core_z >= 1 && map_core_z <= 62) {
+            ground = map_core_z + 1;
         }
         core_height = ground ? 2 : 3;
         core_ground_z = ground ? ground : map.get_z(x, y);
@@ -935,10 +938,10 @@ struct Server::Impl {
     horde::Config horde_cfg;
     // The cell the map's own settings .txt named, or -1 when it did not:
     // a map that knows where its towns stand overrides the cell the
-    // settings would have it at - and the floor it may name besides is
-    // the cell the core stands ON at that place, the tool's own layer:
-    // the bedrock of the room its town hides in, named so the core can
-    // stand inside and not on the hill above it.
+    // settings would have it at - and the layer it may name besides is
+    // the one the core's foot block stands in at that place, above the
+    // bedrock of the room its town hides in, named so the core can stand
+    // inside and not on the hill above it.
     int map_core_x = -1, map_core_y = -1, map_core_z = -1;
     std::unique_ptr<horde::Horde> horde;
     horde::Phase horde_told = horde::Phase::Prep;
@@ -2110,7 +2113,7 @@ struct Server::Impl {
     // reading (the same debounce an edit of the map has), the flag the
     // clients draw moves on the wire's fifth word, and the dig and blast
     // vetoes keep whatever the column is now. A third number names the
-    // floor the column rises from, the tool's own layer - the bedrock of
+    // layer the core's foot block stands in - 61, say, on the bedrock of
     // a cave - and with it the column stands two blocks tall, the same
     // reading the map's own z has; without it, the walk to land speaks.
     void core_command(Player& p, const std::string& text) {
@@ -2132,17 +2135,18 @@ struct Server::Impl {
         }
         const bool bad = ns.size() < 2 || std::isnan(ns[0]) || std::isnan(ns[1]);
         if (bad) {
-            system_chat("usage: /core x y [z] (the cell; z, the floor it stands on)",
+            system_chat("usage: /core x y [z] (the cell; z, the layer its foot stands in)",
                         p.id);
             return;
         }
         int x = static_cast<int>(ns[0]), y = static_cast<int>(ns[1]);
-        int floor_z = 0;
-        if (ns.size() >= 3 && ns[2] >= 1.0 && ns[2] <= 63.0)
-            floor_z = static_cast<int>(ns[2]);
-        if (floor_z) {
-            // A named floor is trusted where it stands; the walk to land
-            // reads the surface, and the floor of a room is not on it.
+        int foot_z = 0;
+        if (ns.size() >= 3 && ns[2] >= 1.0 && ns[2] <= 62.0)
+            foot_z = static_cast<int>(ns[2]);
+        if (foot_z) {
+            // A named layer is trusted where it stands; the walk to land
+            // reads the surface, and the foot of a core in a room is not
+            // sitting on it.
             x = std::min(std::max(x, 2), 509);
             y = std::min(std::max(y, 2), 509);
         } else {
@@ -2156,7 +2160,7 @@ struct Server::Impl {
         erase_core_column();
         horde_cfg.core_x = x;
         horde_cfg.core_y = y;
-        build_core_column(floor_z);
+        build_core_column(foot_z);
         air_core_column();
         horde->move_core(x, y);
         core_resend_next = 0.0;
@@ -4024,10 +4028,10 @@ bool Server::start(std::string& err) {
         // default stays the settings' fixed quarters - its tests read
         // them deterministically.)
         s.horde_cfg.roam_spawns = true;
-        // The map that named the core's floor is trusted as it stands:
-        // the walk to land would drag the core of a room in the hill
-        // out to the surface, the one thing its z exists to prevent.
-        if (s.map_core_z < 1 || s.map_core_z > 63)
+        // The map that named the core's foot layer is trusted as it
+        // stands: the walk to land would drag the core of a room in the
+        // hill out to the surface, the one thing its z exists to prevent.
+        if (s.map_core_z < 1 || s.map_core_z > 62)
             s.nearest_land(s.horde_cfg.core_x, s.horde_cfg.core_y);
         for (int k = 0; k < horde::Config::kSpawnSites; ++k) {
             int x = s.horde_cfg.spawn_x[k], y = s.horde_cfg.spawn_y[k];

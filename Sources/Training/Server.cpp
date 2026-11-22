@@ -1789,43 +1789,49 @@ struct Server::Impl {
     // tread's floor, a cloud hardly a block across that pools rather
     // than climbs, kept coming for its whole stay so the bed stays
     // fresh. Every front owns a band of ids of its own - a bed's id is
-    // its place in its front's band, the bands stacked one a front so
-    // ten trails lie on the ground at once without a bed of one ever
-    // laid over a bed of another - so a resend lays its vapour over the
-    // old in place, and a reading that no longer walks a place simply
-    // stops saying it: the vapour hung there thins out on its own, no
-    // clearing sweep to keep a stale way in on the air. Within a band
-    // the ids count from the doorstep outwards, so the beds nearest the
-    // core keep their ids while a walking trail grows shorter behind
-    // its advancing head. A band holds only so many beds, and a way
-    // longer than its band says the end the defence reads - the treads
-    // by the core - the rest of it held by its ping at the site itself.
-    // A trail wears its front's own colour, held solid the whole way:
-    // the colour names the front, its ping the same; the one marker a
-    // defender cannot mistake for smoke of their own.
+    // its place in its front's band, the bands stacked one a front - so
+    // a resend lays its vapour over the old in place, and a reading
+    // that no longer walks a place simply stops saying it: the vapour
+    // hung there thins out on its own, no clearing sweep to keep a
+    // stale way in on the air. The bands are the client's own budget of
+    // bed ids split across the fronts the blink says: one front on the
+    // ground takes the whole of it and its trail runs its full length,
+    // while a ten-front wave takes it ten ways and each trail holds
+    // only so many beds - and either way a trail trimmed short keeps
+    // the end the defence reads, the treads by the core, dropping the
+    // far end; what the trail drops, its ping at the site still says.
+    // Within a band the ids count from the doorstep outwards, so the
+    // beds nearest the core keep their ids while a walking trail grows
+    // shorter behind its advancing head. A bed is laid a tread, one
+    // tread one cloud - the full pour, twice the spread: a trail that
+    // reads as one unbroken ribbon of its colour, not beads on a
+    // string. A trail wears its front's own colour, held solid the
+    // whole way: the colour names the front, its ping the same; the one
+    // marker a defender cannot mistake for smoke of their own.
     // Sound it carries none: a line of hisses is a racket, not a marker.
     void smoke_route() {
         std::vector<FrontRead> fronts;
         if (!route_reading(fronts)) return;
-        constexpr int kStride = 2;          // a bed every couple of treads: a trail that reads unbroken
-        constexpr int kFrontBeds = 24;      // a band a front: the ten bands' ids run 1..240, clear of 255
+        constexpr int kStride = 1;          // a bed a tread: the full pour, twice the spread
+        constexpr int kBeds = 254;          // the client's own budget of bed ids, clear of 255
         constexpr uint16_t kStay = 7;       // 0.7 s it keeps coming: the heavier pour, one blink's worth and a little over
         constexpr uint8_t kThins = 2;       // 0.2 s the last of it takes to go: it leaves like it settles, slowly
+        const int per = kBeds / static_cast<int>(fronts.size());   // the budget, split across the fronts the blink says
         for (size_t f = 0; f < fronts.size(); ++f) {
             const FrontRead& fr = fronts[f];
             const uint32_t rgb = kFrontColour[fr.corner];
             const uint8_t r = static_cast<uint8_t>((rgb >> 16) & 0xFFu),
                           g = static_cast<uint8_t>((rgb >> 8) & 0xFFu),
                           b = static_cast<uint8_t>(rgb & 0xFFu);
-            const int band = static_cast<int>(f) * kFrontBeds;
+            const int band = static_cast<int>(f) * per;
             const std::vector<horde::RouteCell>& cells = fr.cells;
             int bed = 0;
-            // The doorstep's tread first, then every couple outwards -
-            // the ids of the band count from the core, so the beds the
-            // defence watches keep their ids blink to blink.
+            // The doorstep's tread first, then one outwards - the ids of
+            // the band count from the core, so the beds the defence
+            // watches keep their ids blink to blink.
             for (size_t k = 0; k < cells.size(); ++k) {
                 if (k % kStride != 0 && k + 1 != cells.size()) continue;  // the last tread is said whatever rhythm it falls on
-                if (bed >= kFrontBeds) break;
+                if (bed >= per) break;
                 const horde::RouteCell& c = cells[cells.size() - 1 - k];
                 ++bed;
                 ByteWriter bw;

@@ -67,26 +67,11 @@ DEFINE_SPADES_SETTING(cg_sentryServer, "1");          // 1 = draw the server's g
 // --- Placement / visuals ---
 DEFINE_SPADES_SETTING(cg_sentryScale, "0.1");  // model render scale
 DEFINE_SPADES_SETTING(cg_sentryHeadZ, "-0.1");  // manual head seat, world blocks
-DEFINE_SPADES_SETTING(cg_sentry1Muzzle, "0.78"); // level-1 muzzle distance (frozen 14 Nov)
-DEFINE_SPADES_SETTING(cg_sentry2Muzzle, "1.5");  // level-2 (frozen 14 Nov)
-DEFINE_SPADES_SETTING(cg_sentry3Muzzle, "1.43"); // level-3 (frozen 14 Nov)
-DEFINE_SPADES_SETTING(cg_sentry3MuzzleZ, "0.43"); // level-3 muzzle vertical trim (frozen 14 Nov)
-// live muzzle seats, one triple per tier: X leans to the
-// barrel's right as the gun faces its aim, Y stretches the
-// reach past the frozen distance, Z is a world-vertical trim
-// (positive raises, the convention every seat here already
-// speaks). Defaults zero: the frozen seats above are exactly
-// what is drawn until a dial moves. Temporary calibration
-// knobs; the values that look right get frozen in their place.
-DEFINE_SPADES_SETTING(cg_sentry1MuzzleOffX, "0"); // tier-1 live seat
-DEFINE_SPADES_SETTING(cg_sentry1MuzzleOffY, "0");
-DEFINE_SPADES_SETTING(cg_sentry1MuzzleOffZ, "0");
-DEFINE_SPADES_SETTING(cg_sentry2MuzzleOffX, "0"); // tier-2 live seat
-DEFINE_SPADES_SETTING(cg_sentry2MuzzleOffY, "0");
-DEFINE_SPADES_SETTING(cg_sentry2MuzzleOffZ, "0");
-DEFINE_SPADES_SETTING(cg_sentry3MuzzleOffX, "0"); // tier-3 live seat
-DEFINE_SPADES_SETTING(cg_sentry3MuzzleOffY, "0");
-DEFINE_SPADES_SETTING(cg_sentry3MuzzleOffZ, "0");
+// the per-tier muzzle seats now stand frozen in the code
+// itself: see SentryMuzzleDistance, SentryMuzzleSeat and
+// MuzzlePoint further down. The numbered cg_sentry muzzle
+// knobs of the November calibration rounds are RETIRED; the
+// values that landed right on 22 Nov are now literals.
 DEFINE_SPADES_SETTING(cg_sentryFlash, "1");       // muzzle flash dynamic light
 DEFINE_SPADES_SETTING(cg_sentryYawFix, "0");   // constant orientation fixes,
 DEFINE_SPADES_SETTING(cg_sentryPitchFix, "0"); // in the MODEL's local frame,
@@ -95,20 +80,14 @@ DEFINE_SPADES_SETTING(cg_sentryRollFix, "0");  // degrees, both models
 // --- Level-3 minigun barrels ---
 DEFINE_SPADES_SETTING(cg_sentryBarrelPivotX, "-0.5"); // kv6 pivot to true axis, x
 DEFINE_SPADES_SETTING(cg_sentryBarrelPivotZ, "-0.5"); // ... z (y cancels: spin is Y)
-DEFINE_SPADES_SETTING(cg_sentry3BodyScale, "0.75");
-DEFINE_SPADES_SETTING(cg_sentry3BodyOffX, "-0.01");
-DEFINE_SPADES_SETTING(cg_sentry3BodyOffY, "0.25");
-DEFINE_SPADES_SETTING(cg_sentry3BodyOffZ, "-0.75");
-DEFINE_SPADES_SETTING(cg_sentry3BarrelScale, "0.65");
-DEFINE_SPADES_SETTING(cg_sentry3BarrelOffX, "0");    // live seat (calibration)
-DEFINE_SPADES_SETTING(cg_sentry3BarrelOffY, "-0.07");
-DEFINE_SPADES_SETTING(cg_sentry3BarrelOffZ, "0.57");
+// the level-3 body and barrel seats stand frozen as literals
+// in Render3D; their numbered cg_sentry knobs are retired.
 //
 // --- casings & muzzle puff ---
 DEFINE_SPADES_SETTING(cg_sentryCasingFwd, "-0.5"); // casing throw, levels 1-2
-DEFINE_SPADES_SETTING(cg_sentry2CasingScale, "1.25");
-DEFINE_SPADES_SETTING(cg_sentry3CasingScale, "1.5");
-DEFINE_SPADES_SETTING(cg_sentry3CasingFwd, "-0.5"); // level-3 ejection seat (frozen 14 Nov)
+// the per-tier casing scales and the level-3 ejection seat
+// stand frozen as literals in FireVisual; their cg_sentry
+// knobs are retired.
 DEFINE_SPADES_SETTING(cg_sentryFlashRadius, "14"); // muzzle light radius
 DEFINE_SPADES_SETTING(cg_sentryPuffRadius, "0.3"); // levels 1-2 muzzle puff
 DEFINE_SPADES_SETTING(cg_sentryPuffGrowth, "6");   // ... growth, blocks/s
@@ -123,35 +102,30 @@ namespace spades {
 
 		// Per-level muzzle distance from the head pivot: each tier has
 		// its own gun length, so the tracer, smoke, flash puff and
-		// muzzle light all start at the right spot.
+		// muzzle light all start at the right spot. The numbered
+		// cg_sentry knobs are retired; the distances froze 22 Nov.
 		static float SentryMuzzleDistance(int level) {
 			switch (level) {
-				case 1:  return (float)cg_sentry1Muzzle;
-				case 2:  return (float)cg_sentry2Muzzle;
-				default: return (float)cg_sentry3Muzzle;
+				case 1:  return 0.78f; // level-1 (frozen 14 Nov)
+				case 2:  return 2.f;    // level-2 (frozen 22 Nov)
+				default: return 3.f;   // level-3 (frozen 22 Nov)
 			}
 		}
 
-		// The live seat of the tier's muzzle, the calibration triple
-		// every shot's show anchors to: X leans to the barrel's
-		// right, Y stretches the reach past the frozen distance, Z
-		// raises the muzzle in the world's own down-pointing z.
-		// Zero everywhere = the frozen seats alone, as drawn since
-		// November.
+		// The seat of the tier's muzzle, the triple every shot's
+		// show anchors to: X leans to the barrel's right, Y
+		// stretches the reach past the distance, Z raises the
+		// muzzle in the world's own down-pointing z. The values
+		// the 22 Nov calibration landed on now stand frozen
+		// here; the cg_sentryN* knobs are retired.
 		static Vector3 SentryMuzzleSeat(int level) {
 			switch (level) {
 				case 1:
-					return MakeVector3((float)cg_sentry1MuzzleOffX,
-					                   (float)cg_sentry1MuzzleOffY,
-					                   (float)cg_sentry1MuzzleOffZ);
+					return MakeVector3(0.f, 0.3f, 0.f);    // frozen 22 Nov
 				case 2:
-					return MakeVector3((float)cg_sentry2MuzzleOffX,
-					                   (float)cg_sentry2MuzzleOffY,
-					                   (float)cg_sentry2MuzzleOffZ);
+					return MakeVector3(0.f, 0.1f, 0.f);    // frozen 22 Nov
 				default:
-					return MakeVector3((float)cg_sentry3MuzzleOffX,
-					                   (float)cg_sentry3MuzzleOffY,
-					                   (float)cg_sentry3MuzzleOffZ);
+					return MakeVector3(0.f, -1.1f, -0.05f); // frozen 22 Nov
 			}
 		}
 
@@ -784,7 +758,7 @@ namespace spades {
 			// One seat, read everywhere a shot shows: the tracer, the
 			// smoke, the puff and the flash all start from THIS
 			// point, so the gun reads as one piece however it turns.
-			// The frozen reach runs along the aim as ever; the live
+			// The frozen reach runs along the aim as ever; the
 			// seat rides the gun's OWN frame (right = the render's
 			// own right axis, so a lean dialed in facing one way
 			// holds facing every way), and the Z of the seat is the
@@ -798,7 +772,7 @@ namespace spades {
 			                 right * seat.x;
 			muzzle.z -= seat.z; // z is down: a positive seat raises
 			if (level == 3)
-				muzzle.z -= (float)cg_sentry3MuzzleZ; // z is down: raise
+				muzzle.z -= 0.43f; // z is down: raise; frozen 14 Nov
 			return muzzle;
 		}
 
@@ -957,12 +931,12 @@ namespace spades {
 				Vector3 casingOrigin = HeadOrigin();
 				if (level == 3) {
 					flyDir = aimDir * 0.5f - left + up * 0.2f;
-					casingScale = (float)cg_sentry3CasingScale;
-					casingOrigin += AimForward() * (float)cg_sentry3CasingFwd;
+					casingScale = 2.f;  // frozen 22 Nov
+					casingOrigin += AimForward() * -0.5f; // frozen 14 Nov
 				} else {
 					flyDir = aimDir * (float)cg_sentryCasingFwd + left + up * 0.2f;
 					if (level == 2)
-						casingScale = (float)cg_sentry2CasingScale;
+						casingScale = 1.5f; // frozen 22 Nov
 				}
 				client.AddLocalEntity(stmp::make_unique<SentryCasing>(
 					client, casingModel.GetPointerOrNull(),
@@ -1237,14 +1211,14 @@ namespace spades {
 				Vector3 bodyOff = MakeVector3(0.f, 0.f, 0.f);
 				Vector3 barrelOff = MakeVector3(0.f, 0.f, 0.f);
 				if (level == 3) {
-					headScale *= (float)cg_sentry3BodyScale;
-					bodyOff.x = (float)cg_sentry3BodyOffX;
-					bodyOff.y = (float)cg_sentry3BodyOffY;
-					bodyOff.z = (float)cg_sentry3BodyOffZ;
-					barrelScale *= (float)cg_sentry3BarrelScale;
-					barrelOff.x = (float)cg_sentry3BarrelOffX;
-					barrelOff.y = (float)cg_sentry3BarrelOffY;
-					barrelOff.z = (float)cg_sentry3BarrelOffZ;
+					headScale *= 0.75f;
+					bodyOff.x = -0.01f;
+					bodyOff.y = 0.25f;
+					bodyOff.z = -0.75f;
+					barrelScale *= 0.65f;
+					barrelOff.x = 0.f;
+					barrelOff.y = -0.07f;
+					barrelOff.z = 0.7f; // frozen 22 Nov
 				}
 
 				if (headModel) {

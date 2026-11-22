@@ -2320,8 +2320,15 @@ struct Server::Impl {
         // spade stays holstered while the legs make ground. A head
         // stuck past the windup, and not resting on the spade's own
         // cadence at a wall it already opens, is granted the licence:
-        // the wall in its face comes down.
+        // the wall in its face comes down - PROVIDED the walk has no
+        // word for the ground it stands on. Pressed to a town wall
+        // with a gate still open along it, the stuck clock owes
+        // nothing: the pack crowding a head off its own advice is
+        // not a wall, and the answer the field still holds is the
+        // one to take - while the ground is truly sealed, here
+        // alone, the licence is the only way through there is.
         const bool stuck_licence = p.stuck_at >= 0.0 &&
+                                   !leg_led &&
                                    world_time - p.stuck_at >= kStuckDigWindup &&
                                    world_time - p.spade_at >= horde_cfg.dig_seconds;
         // The miller's licence: stillness is only one way to be pinned.

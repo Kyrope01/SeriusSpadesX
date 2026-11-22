@@ -14,9 +14,10 @@
 // more is a wall, for the legs alone cannot dig. But the dead carry a
 // spade, and beside the legs' walk a second field prices what the spade
 // could cross - a fall of up to kFall, a climb at kDigPenalty steps a
-// block - consulted only where the legs' reading is silent or its way
-// home saves kDigShortcut steps or more, so a wall is crossed only when
-// going around it is the longer errand, and a sealed town still anchors
+// block - consulted only on the licences of the pinned: the stuck
+// clock run out where the legs' walk is silent, the watch run down
+// where no ground is gained, so a wall is crossed only when the walk
+// has already failed the dead at it, and a sealed town still anchors
 // its waves on the spade's own frontier.
 // The veto asks the same legs' walk the
 // other way round, with the block a player wants
@@ -535,20 +536,20 @@ void test_route() {
     }
 }
 
-// The spade's own walk: a second field priced dear, consulted only where
-// the legs' reading fails or its shortcut is worth the price, and a
-// sealed town that still anchors, raises and traces its waves on it.
+// The spade's own walk: a second field priced dear, consulted only on
+// the licences of the pinned, and a sealed town that still anchors,
+// raises and traces its waves on it.
 void test_dig() {
-    std::printf("[dig] the spade's walk, priced and consulted\n");
-    // The open plain: the dig way home is the legs' own way home, saving
-    // nothing, and the spade stays in its belt.
+    std::printf("[dig] the spade's walk, priced for the pinned\n");
+    // The open plain: the legs walk it free, and a walk priced only
+    // where the legs fail is never priced at all.
     {
         SolidMap map;
         plain(map);
         horde::Horde h(map, horde_cfg(256, 256));
         check(h.distance(210, 210) >= 0, "the plain's walk runs free");
-        check(!h.dig_worth(210, 210, GROUND_TOP),
-              "no shortcut on the plain: the spade stays holstered");
+        check(h.dig_distance(210, 210, GROUND_TOP) < 0,
+              "no gain on the plain: the spade walk is never priced");
     }
     // The sealed ring: the legs are shut out, the spade's way crosses its
     // wall, the wave still stands up, and the advice at the wall's foot
@@ -559,8 +560,8 @@ void test_dig() {
         ring(map, Ring{256, 256, 6, -1, -1});
         horde::Horde h(map, horde_cfg(256, 256));
         check(h.distance(270, 256) < 0, "the legs' walk is shut out");
-        check(h.dig_worth(270, 256, GROUND_TOP),
-              "with the legs silent, the spade is worth it");
+        check(h.dig_distance(270, 256, GROUND_TOP) >= 0,
+              "with the legs silent, the spade walk still names a way home");
         int tx = 0, ty = 0, tz = 0;
         check(h.next_dig_step(270, 256, GROUND_TOP, tx, ty, tz) &&
                   (tx != 270 || ty != 256) && tz == GROUND_TOP,
@@ -590,8 +591,8 @@ void test_dig() {
         horde::Config off_cfg = horde_cfg(256, 256);
         off_cfg.dig = false;
         horde::Horde off(map, off_cfg);
-        check(!off.dig_worth(270, 256, GROUND_TOP),
-              "the licence off: worth nothing");
+        check(off.dig_distance(270, 256, GROUND_TOP) < 0,
+              "the licence off: the spade walk is never priced");
         off.restart(0.0);
         off.tick(10.5);
         check(off.phase() == horde::Phase::Wave && off.placed() == 0,
@@ -634,8 +635,8 @@ void test_dig() {
         horde::Horde h(map, cfg);
         check(h.distance(270, 256, GROUND_TOP) < 0,
               "a named marker buried: the ground above is no place at the core");
-        check(h.dig_worth(255, 256, GROUND_TOP),
-              "the roof above a buried core: the legs are silent, the spade is worth it");
+        check(h.distance(255, 256, GROUND_TOP) < 0,
+              "the roof above a buried core: the legs are silent");
         check(h.dig_distance(255, 256, GROUND_TOP) > 0,
               "the spade walk keeps its own count on the roof");
         check(h.dig_distance(256, 256, 37) == 0,

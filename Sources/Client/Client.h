@@ -100,6 +100,7 @@ namespace spades {
 			friend class TCProgressView;
 			friend class ClientPlayer;
 			friend class ClientUI;
+			friend class SentryEntity;
 
 			/** used to keep the input state of keypad so that
 			 * after user pressed left and right, and then

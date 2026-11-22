@@ -191,6 +191,15 @@ cmake --build . --parallel
 nix build
 ```
 
+### Everything at once (Windows)
+
+After the first configure above, one command from the repo root rebuilds
+the game and the paks together and installs both beside the fresh exe,
+the portable way (settings and paks live beside the exe, nothing in
+AppData):
+
+    build-all.cmd
+
 ### Tests
 The VR unit tests and the Training server's test, under CTest (no GPU or
 headset needed):

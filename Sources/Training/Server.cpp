@@ -96,6 +96,23 @@ constexpr int kZombieYoyoWindows = 6;
 // names is opened in turn, wall or ceiling, top down at the dig's own
 // pace.
 constexpr double kStuckDigWindup = 3.0;
+// The milling licence: a pack pinned far from the stairs shuffles a
+// little every window of its watch, and a shuffler never stands still
+// long enough for the stuck windows to catch it - the moved-window
+// keeps it honest, the yo-yo its own. So the dig keeps a second clock
+// that movement alone cannot reset: the leader holds a milestone of
+// its score, and only a reading lower by kDigWatchGain winds the
+// watch again. kDigWatchSeconds of shuffling without a net gain of
+// ground, and the licence is owed all the same - the wall a pack
+// mills at is never far from where it mills.
+constexpr double kDigWatchSeconds = 8.0;
+constexpr int kDigWatchGain = 3;
+// The flight a licensed stroke cuts into a wall: three strips into
+// the face, each strip standing its room one step higher than the
+// strip before it, the whole lane three wide. A wall one stroke
+// cannot finish is climbed a flight at a time - a staircase the
+// legs walk as the spade goes on.
+constexpr int kDigFlightDepth = 3;
 // A leader stalled this long - stuck past the windup, and not already
 // swinging at a wall it is opening for the line - loses its line for
 // a while: a follower owed prints it cannot walk reads the field for
@@ -490,6 +507,18 @@ struct Player {
     // its place in the line stirs on the spot by design.
     int foot_dist = -1;
     int stall_windows = 0;
+    // The dig watch: the absolute clock the licence reads as its
+    // second opinion. stuck_at is stillness, and a milling pack is
+    // never still; the watch measures ground instead - dig_watch_dist
+    // is the last milestone of a score, and only a reading kDigWatchGain
+    // lower than the milestone winds dig_watch_at again. A leader whose
+    // watch runs out has milled a whole kDigWatchSeconds without gaining
+    // a step of ground, however busy its feet were, and the spade is
+    // owed. A leader off every walk - pacing where neither field
+    // reads - holds no milestone, and the watch stands down: nowhere
+    // to dig, no licence owed for pacing alone.
+    double dig_watch_at = -1.0;
+    int dig_watch_dist = 0;
     // When it last flung itself at the step it could not climb.
     double pounce_at = -1e9;
     // When its line last rode the last resort down the road: the mercy
@@ -1253,6 +1282,7 @@ struct Server::Impl {
             p.stuck_at = -1.0;
             p.foot_dist = -1;
             p.stall_windows = 0;
+            p.dig_watch_at = -1.0;
             p.alive = true;
             p.tool = kToolWeapon;
             if (p.zombie) p.tool = kToolSpade;   // it never fires a shot
@@ -2276,7 +2306,16 @@ struct Server::Impl {
         const bool stuck_licence = p.stuck_at >= 0.0 &&
                                    world_time - p.stuck_at >= kStuckDigWindup &&
                                    world_time - p.spade_at >= horde_cfg.dig_seconds;
-        if (leg_led && !horde->dig_worth(cx, cy, fz) && !stuck_licence)
+        // The miller's licence: stillness is only one way to be pinned.
+        // A pack far from the stairs shuffles every window and so
+        // never reads stuck, yet gains not a step of ground - the dig
+        // watch says so where the stuck clock cannot, and the licence
+        // this second reading owes opens the same wall either way.
+        const bool watch_licence = p.dig_watch_at >= 0.0 &&
+                                   world_time - p.dig_watch_at >= kDigWatchSeconds &&
+                                   world_time - p.spade_at >= horde_cfg.dig_seconds;
+        const bool licensed = stuck_licence || watch_licence;
+        if (leg_led && !horde->dig_worth(cx, cy, fz) && !licensed)
             return false;
         int tx = cx, ty = cy, tz = fz;
         if (!horde->next_dig_step(cx, cy, fz, tx, ty, tz)) {
@@ -2290,7 +2329,7 @@ struct Server::Impl {
             // chipped from the top, a stroke a voxel, until the climb
             // is one the legs make after all - and the field, freshly
             // recomputed, pours the pack through the breach.
-            if (!stuck_licence) return false;
+            if (!licensed) return false;
             const float ox = std::fabs(p.body.ori.x),
                         oy = std::fabs(p.body.ori.y);
             int sx = 0, sy = 0;
@@ -2324,8 +2363,10 @@ struct Server::Impl {
         // blocks are the one thing never touched.
         const int climb = tz < fz ? fz - tz : 0;
         int spade_z = -1;
+        bool flight = false;
         if (climb > horde::Config::kWalkClimb) {
             spade_z = tz;
+            flight = true;
         } else if (tz > fz) {
             for (int z = fz; z < tz; ++z) {
                 if (map.solid(tx, ty, z)) { spade_z = z; break; }
@@ -2352,22 +2393,61 @@ struct Server::Impl {
             if (!map.solid(tx, ty, spade_z)) return true;   // the field has not caught up yet
             if (core_column_cell(tx, ty, spade_z)) return true;
             std::vector<Cell> removed;
-            for (int i = -1; i <= 1; ++i) {
-                const int bx = tx + lx * i;
-                const int by = ty + ly * i;
-                if (i != 0 && !map.solid(bx, by, spade_z))
-                    continue;   // a mate rides along only onto rock
-                if (core_column_cell(bx, by, spade_z))
-                    continue;   // the core holds, mate or focus
-                map.destroy_point(bx, by, spade_z, &removed);
-                ByteWriter bw;
-                bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
-                bw.write_u8(static_cast<uint8_t>(p.id));
-                bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
-                bw.write_i32(bx);
-                bw.write_i32(by);
-                bw.write_i32(spade_z);
-                broadcast(bw, true);
+            if (flight) {
+                // The staircase cut whole flights at a stroke: the
+                // chip that came one voxel at a time walked the dead
+                // into a breach their own bodies could not follow -
+                // a door a cube wide is a wall to the box. So one
+                // stroke takes the full flight: the strips run into
+                // the face one a block, and each strip stands its
+                // room a step higher than the strip before it,
+                // kStandHead tall, the tread of each strip the wall
+                // mass below - never touched. The lane holds its
+                // three widths, the core holds against every cell,
+                // and the air rides along unharmed: the stroke takes
+                // rock alone, and what it leaves is a stair the
+                // legs walk out of the moment it opens.
+                for (int i = 0; i < kDigFlightDepth; ++i) {
+                    const int sx = tx + fx * i;
+                    const int sy = ty + fy * i;
+                    for (int j = -1; j <= 1; ++j) {
+                        const int bx = sx + lx * j;
+                        const int by = sy + ly * j;
+                        for (int k = 0; k < horde::Config::kStandHead; ++k) {
+                            const int bz = fz - 2 - i + k;
+                            if (bz < 0) continue;
+                            if (!map.solid(bx, by, bz)) continue;
+                            if (core_column_cell(bx, by, bz)) continue;
+                            map.destroy_point(bx, by, bz, &removed);
+                            ByteWriter bw;
+                            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+                            bw.write_u8(static_cast<uint8_t>(p.id));
+                            bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
+                            bw.write_i32(bx);
+                            bw.write_i32(by);
+                            bw.write_i32(bz);
+                            broadcast(bw, true);
+                        }
+                    }
+                }
+            } else {
+                for (int i = -1; i <= 1; ++i) {
+                    const int bx = tx + lx * i;
+                    const int by = ty + ly * i;
+                    if (i != 0 && !map.solid(bx, by, spade_z))
+                        continue;   // a mate rides along only onto rock
+                    if (core_column_cell(bx, by, spade_z))
+                        continue;   // the core holds, mate or focus
+                    map.destroy_point(bx, by, spade_z, &removed);
+                    ByteWriter bw;
+                    bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+                    bw.write_u8(static_cast<uint8_t>(p.id));
+                    bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
+                    bw.write_i32(bx);
+                    bw.write_i32(by);
+                    bw.write_i32(spade_z);
+                    broadcast(bw, true);
+                }
             }
             touched(removed, false);
             p.spade_at = world_time;
@@ -2430,6 +2510,7 @@ struct Server::Impl {
                 q->foot_dist = -1;
                 q->stall_windows = 0;
                 q->stuck_at = -1.0;
+                q->dig_watch_at = -1.0;
                 q->walk_ref = dest;
                 q->walk_ref_at = world_time;
                 q->teleport_at = world_time;
@@ -2723,6 +2804,22 @@ struct Server::Impl {
             // and only counted windows arm the hop, the fling, the spade's
             // licence and the line's disband to answer it.
             const int score = fd >= 0 ? fd : horde->dig_distance(cx, cy, fz);
+            // The dig watch, leader only: the milestone is a reading
+            // kDigWatchGain lower than the one it holds, and that
+            // alone winds it - the shuffle that hides a pack from the
+            // stuck clock gains nothing it can cash here. Pacing where
+            // neither walk reads stands the watch down: no milestone,
+            // no licence owed for feet with nowhere to dig.
+            if (p.ahead_id < 0 && score >= 0) {
+                if (p.dig_watch_at < 0.0 ||
+                    score <= p.dig_watch_dist - kDigWatchGain) {
+                    p.dig_watch_at = world_time;
+                    p.dig_watch_dist = score;
+                }
+            } else if (p.ahead_id < 0 && score < 0 &&
+                       p.dig_watch_at >= 0.0) {
+                p.dig_watch_at = -1.0;   // nowhere either walk reads
+            }
             if (p.ahead_id >= 0 || p.body.airborne) {
                 p.foot_dist = -1;          // off the walk or a step in line
                 p.stall_windows = 0;

@@ -614,8 +614,19 @@ struct Server::Impl {
     }
 
     // --- the map ----------------------------------------------------------
-    // The horde's map: the .vxl the settings name, or the built course.
+    // The horde's map: the .vxl the settings name, the one the game itself
+    // carries, or the built course. The settings .txt the map calls its own
+    // is read beside whichever of the two it was, the mode's own maps
+    // shipping their parameters in it.
     bool load_map(std::string& err) {
+        if (horde_mode() && !cfg.map_data.empty()) {
+            if (!map.load_vxl(reinterpret_cast<const uint8_t*>(cfg.map_data.data()),
+                              cfg.map_data.size(), err))
+                return false;
+            read_map_settings(cfg.map_settings);
+            map.to_solid_map(phys_map);
+            return true;
+        }
         if (horde_mode() && !cfg.map_file.empty()) {
             std::ifstream in(cfg.map_file, std::ios::binary);
             if (!in) {
@@ -629,6 +640,14 @@ struct Server::Impl {
                 return false;
             }
             if (!map.load_vxl(data.data(), data.size(), err)) return false;
+            std::ifstream txt(sibling_settings_file(cfg.map_file), std::ios::binary);
+            if (txt) {
+                const std::string settings((std::istreambuf_iterator<char>(txt)),
+                                           std::istreambuf_iterator<char>());
+                read_map_settings(settings);
+            } else {
+                read_map_settings("");
+            }
             map.to_solid_map(phys_map);
             return true;
         }
@@ -636,6 +655,129 @@ struct Server::Impl {
         generate_aim_arena(map, static_cast<int>(cfg.scenario));
         map.to_solid_map(phys_map);
         return true;
+    }
+
+    // The .txt that stands beside a .vxl from disk, when there is one: the
+    // same name with the settings extension on it.
+    static std::string sibling_settings_file(const std::string& vxl) {
+        std::string side = vxl;
+        const size_t dot = side.rfind('.');
+        if (dot != std::string::npos) side.resize(dot);
+        side += ".txt";
+        return side;
+    }
+
+    // The settings the mode's own maps carry, the pyspades flavour: a
+    // Python-flavoured literal whose extensions dict is the one part read.
+    // Keys are quoted words, every value a number, a quoted word, or a list
+    // of numbers; the file's own name and description are passed over
+    // unread (a quote inside a quoted word would lie to a simpler reader),
+    // and so is any key the host does not owe. Nothing is owed: a map
+    // without the file, or without a key, keeps what it already stood on.
+    // The core_position the vocabulary knows is a cell of the map and its
+    // bedrock layer, the word its tool names the ground by - the column
+    // is read off the real ground at the cell, the z only saying where
+    // the tool stood counting, so it is not parsed at all.
+    void read_map_settings(const std::string& text) {
+        map_core_x = map_core_y = -1;
+        if (text.empty()) return;
+        auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+        auto word_char = [](char c) {
+            return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+        };
+        auto skip_quoted = [&](size_t& i) {
+            const char quote = text[i++];
+            while (i < text.size() && text[i] != quote) {
+                if (text[i] == '\\' && i + 1 < text.size()) ++i;
+                ++i;
+            }
+            if (i < text.size()) ++i;
+        };
+        size_t at = 0, dict = std::string::npos;
+        while ((at = text.find("extensions", at)) != std::string::npos) {
+            size_t eq = at + 10;
+            if (at > 0 && word_char(text[at - 1])) {
+                ++at;
+                continue;
+            }
+            while (eq < text.size() && blank(text[eq])) ++eq;
+            if (eq >= text.size() || text[eq] != '=') {
+                at += 10;
+                continue;
+            }
+            size_t open = eq + 1;
+            while (open < text.size() && blank(text[open])) ++open;
+            if (open >= text.size() || text[open] != '{') {
+                at += 10;
+                continue;
+            }
+            dict = open;
+            break;
+        }
+        if (dict == std::string::npos) {
+            log("map settings: no extensions read");
+            return;
+        }
+        size_t i = dict + 1;
+        for (;;) {
+            while (i < text.size() && (blank(text[i]) || text[i] == ',')) ++i;
+            if (i >= text.size() || text[i] == '}') break;
+            if (text[i] != '\'' && text[i] != '"') break;
+            const char quote = text[i++];
+            std::string key;
+            while (i < text.size() && text[i] != quote) {
+                if (text[i] == '\\' && i + 1 < text.size()) {
+                    ++i;
+                    key += text[i];
+                } else {
+                    key += text[i];
+                }
+                ++i;
+            }
+            if (i >= text.size()) break;
+            ++i;
+            while (i < text.size() && blank(text[i])) ++i;
+            if (i >= text.size() || text[i] != ':') break;
+            ++i;
+            while (i < text.size() && blank(text[i])) ++i;
+            std::vector<double> ns;
+            if (i < text.size() && text[i] == '[') {
+                size_t shut = i + 1;
+                while (shut < text.size() && text[shut] != ']') ++shut;
+                if (shut >= text.size()) break;
+                size_t from = i + 1;
+                for (;;) {
+                    const size_t comma = text.find(',', from);
+                    const std::string one = comma == std::string::npos || comma > shut
+                                                ? text.substr(from, shut - from)
+                                                : text.substr(from, comma - from);
+                    const std::string cut = trimmed(one);
+                    if (!cut.empty()) ns.push_back(std::strtod(cut.c_str(), nullptr));
+                    if (comma == std::string::npos || comma > shut) break;
+                    from = comma + 1;
+                }
+                i = shut + 1;
+            } else if (i < text.size() && (text[i] == '\'' || text[i] == '"')) {
+                skip_quoted(i);
+            } else {
+                size_t end = i;
+                while (end < text.size() && text[end] != ',' && text[end] != '}' &&
+                       !blank(text[end]))
+                    ++end;
+                const std::string cut = trimmed(text.substr(i, end - i));
+                if (!cut.empty()) ns.push_back(std::strtod(cut.c_str(), nullptr));
+                i = end;
+            }
+            const std::string key_l = lowered(key);
+            if ((key_l == "core_position" || key_l == "core") && ns.size() >= 2) {
+                map_core_x = static_cast<int>(ns[0]);
+                map_core_y = static_cast<int>(ns[1]);
+            }
+        }
+        if (map_core_x >= 0)
+            log("map settings: core at %d, %d", map_core_x, map_core_y);
+        else
+            log("map settings: no core_position; the settings' own cell stands");
     }
     // The nearest land column to (x, y): the one asked for when its bedrock
     // layer is solid, and the first land found scanning rings out otherwise
@@ -682,8 +824,51 @@ struct Server::Impl {
             map.set(x, y, core_ground_z - k, 0x7F3080FFu);
         core_top_z = core_ground_z - 3;
     }
+
+    // The column of the old column: whatever of it stands is taken down and
+    // the wire told, so a core that moved mid game leaves no stub behind.
+    // The where of a fresh one is named by the caller; this only erases.
+    void erase_core_column() {
+        const int x = horde_cfg.core_x, y = horde_cfg.core_y;
+        std::vector<Cell> removed;
+        for (int k = 1; k <= 3; ++k) {
+            const int z = core_ground_z - k;
+            if (!map.solid(x, y, z)) continue;
+            ByteWriter bw;
+            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+            bw.write_u8(kTurretBlockId);
+            bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
+            bw.write_i32(x);
+            bw.write_i32(y);
+            bw.write_i32(z);
+            broadcast(bw, true);
+            map.clear(x, y, z);
+            removed.push_back(Cell{x, y, z});
+        }
+        touched(removed, false);
+    }
+    // The same, said on the wire: the blocks the column is, worn in the
+    // core's colour, the works placed as the guns are placed - in front of
+    // the eyes a SetColor, so the colour is said before the blocks that
+    // wear it, and a client still loading keeps both.
+    void air_core_column() {
+        turret_colour_said(0x3080FFu);
+        std::vector<Cell> built;
+        const int x = horde_cfg.core_x, y = horde_cfg.core_y;
+        for (int k = 1; k <= 3; ++k) {
+            const int z = core_ground_z - k;
+            if (!map.solid(x, y, z)) continue;
+            turret_block_built(x, y, z);
+            built.push_back(Cell{x, y, z});
+        }
+        touched(built, true);
+    }
     // The horde's brain, and what its host remembers between its ticks.
     horde::Config horde_cfg;
+    // The cell the map's own settings .txt named, or -1 when it did not:
+    // a map that knows where its towns stand overrides the cell the
+    // settings would have it at.
+    int map_core_x = -1, map_core_y = -1;
     std::unique_ptr<horde::Horde> horde;
     horde::Phase horde_told = horde::Phase::Prep;
     int horde_wave_told = 0;
@@ -720,6 +905,12 @@ struct Server::Impl {
     double turret_resend_next = 0.0;
     std::vector<proto::TurretState> turrets_sent;
     bool turrets_sent_any = false;
+    // The core as the wire last said it, and when its word is owed whole
+    // again: the flag the clients draw as the core moves with it (/core),
+    // and the smoke's fifth word is the only packet that can say a move
+    // without telling of a game of capture nobody played.
+    int core_sent_x = -1, core_sent_y = -1, core_sent_z = -1;
+    double core_resend_next = 0.0;
     void serve_maps() {
         if (job_running && job_done.load()) {
             map_job.join();
@@ -1546,6 +1737,29 @@ struct Server::Impl {
             if (o && o->peer && !o->loading && o->ext_turrets && o->playing()) send(*o, bw);
     }
 
+    // The core's own word, the smoke's fifth: the cell the core's column
+    // stands on and the plane of its top, so the flag a client draws from
+    // its StateData and the flag a client hears about mid game are the
+    // same flag. Said at once when the core moved and whole again every
+    // five seconds, the guns' own economy - a client that finishes
+    // loading mid game is owed it too.
+    void core_state_send() {
+        if (!horde_mode() || !horde) return;
+        const int x = horde_cfg.core_x, y = horde_cfg.core_y;
+        const int z = map.get_z(x, y);
+        const bool again = world_time >= core_resend_next;
+        if (again) core_resend_next = world_time + kTrailResend;
+        if (!again && x == core_sent_x && y == core_sent_y && z == core_sent_z) return;
+        core_sent_x = x;
+        core_sent_y = y;
+        core_sent_z = z;
+        ByteWriter bw;
+        proto::write_core(bw, static_cast<uint16_t>(x), static_cast<uint16_t>(y),
+                          static_cast<uint8_t>(z));
+        for (auto& o : players)
+            if (o && o->peer && !o->loading && o->ext_turrets && o->playing()) send(*o, bw);
+    }
+
     // A pillar taken down: whatever blocks of it still stand go with it,
     // so no coloured stub of a dead gun is left floating, and the wire
     // says the gun is gone by no longer saying it.
@@ -1676,6 +1890,7 @@ struct Server::Impl {
             ++i;
         }
         turret_state_send();
+        core_state_send();
     }
 
     // The builder's word to the server made good: a pillar on the block
@@ -1812,6 +2027,56 @@ struct Server::Impl {
         std::string reply;
         turret_place(p, level, reply);
         system_chat(reply, p.id);
+    }
+
+    // The core's own word: /core x y stands it at a new cell, however the
+    // game runs - the old column goes, the fresh one is read off the ground
+    // there the same way the first was, and everything that follows the
+    // core follows at once: the zombies' field walks to it at its own next
+    // reading (the same debounce an edit of the map has), the flag the
+    // clients draw moves on the wire's fifth word, and the dig and blast
+    // vetoes keep whatever the column is now. A z in the word is accepted
+    // and unused: the map tools speak in bedrock layers, not heights.
+    void core_command(Player& p, const std::string& text) {
+        if (!horde_mode() || !horde) {
+            system_chat("The core only stands in a horde world.", p.id);
+            return;
+        }
+        std::vector<double> ns;
+        const std::string cut = trimmed(lowered(text).substr(5));
+        size_t from = 0;
+        for (;;) {
+            const size_t sp = cut.find(' ', from);
+            const std::string one = sp == std::string::npos
+                                        ? cut.substr(from)
+                                        : cut.substr(from, sp - from);
+            if (!one.empty()) ns.push_back(std::strtod(one.c_str(), nullptr));
+            if (sp == std::string::npos) break;
+            from = sp + 1;
+        }
+        const bool bad = ns.size() < 2 || std::isnan(ns[0]) || std::isnan(ns[1]);
+        if (bad) {
+            system_chat("usage: /core x y (the cell on the map)", p.id);
+            return;
+        }
+        int x = static_cast<int>(ns[0]), y = static_cast<int>(ns[1]);
+        nearest_land(x, y);
+        if (x == horde_cfg.core_x && y == horde_cfg.core_y) {
+            system_chat("The core already stands at " + std::to_string(x) + ", " +
+                             std::to_string(y) + ".", p.id);
+            return;
+        }
+        erase_core_column();
+        horde_cfg.core_x = x;
+        horde_cfg.core_y = y;
+        build_core_column();
+        air_core_column();
+        horde->move_core(x, y);
+        core_resend_next = 0.0;
+        core_state_send();
+        system_chat("The core stands at " + std::to_string(x) + ", " +
+                         std::to_string(y) + ".");
+        log("the core moved to %d, %d by %s's word", x, y, p.name.c_str());
     }
 
     // One frame of teeth, or of the spade: the swing the clients animate,
@@ -3487,8 +3752,10 @@ struct Server::Impl {
             else if (horde_mode() &&
                      (text.rfind("/turret", 0) == 0 || text.rfind("/sentry", 0) == 0)) {
                 turret_command(p, text);
+            } else if (horde_mode() && text.rfind("/core", 0) == 0) {
+                core_command(p, text);
             } else if (horde_mode())
-                system_chat("Commands here: /clearwave, /kill, /turret", p.id);
+                system_chat("Commands here: /clearwave, /kill, /turret, /core", p.id);
             else system_chat(aim_mode() ? "Commands here: /restart, /kill"
                                         : "Commands here: /kill", p.id);
             return;
@@ -3649,6 +3916,13 @@ bool Server::start(std::string& err) {
         // is flat open land everywhere outside the course's corridor. On a
         // .vxl of coastline the cells the settings ask for can be at sea, so
         // each is walked in to the nearest land.
+        // The map's own settings, when they named the core's cell, outrank
+        // the settings' word: a shipped course knows where its towns stand,
+        // whatever a setting the player never touched would have it at.
+        if (s.map_core_x >= 0) {
+            s.cfg.core_x = s.map_core_x;
+            s.cfg.core_y = s.map_core_y;
+        }
         s.horde_cfg.core_x = s.cfg.core_x;
         s.horde_cfg.core_y = s.cfg.core_y;
         // The waves deal their own quarters this side: every wave redraws

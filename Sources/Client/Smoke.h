@@ -55,6 +55,11 @@ namespace spades {
 		 *                           sent before: what this list does not name
 		 *                           is not standing.
 		 *     4  Turret Shot  S->C  id(1), at the very tick the shot lands
+		 *     5  Core          S->C  x(2) y(2) z(1): the cell the core's
+		 *                           column stands on and the plane of its
+		 *                           top, moving the flag the client draws
+		 *                           as the core (a vanilla packet cannot
+		 *                           say it without a capture or a drop)
 		 */
 		struct SmokeParams {
 			// 0 spreads as a wide cloud, 1 rises as a thin column, 2 gathers
@@ -110,6 +115,11 @@ namespace spades {
 			static constexpr std::uint8_t kSubPath = 2;
 			static constexpr std::uint8_t kSubTurret = 3;
 			static constexpr std::uint8_t kSubTurretShot = 4;
+			/** The core's standing place, said again at once when it moves
+			 * (the /core server command) and whole on the same five seconds
+			 * the guns are - a client that finished loading mid game is
+			 * owed the flag whatever its StateData said. */
+			static constexpr std::uint8_t kSubCore = 5;
 
 			/** The stop flag for a new smoke; an id in use stops the old one. */
 			std::shared_ptr<bool> Start(int id);

@@ -25,12 +25,16 @@
 #include <thread>
 
 #include <Core/Debug.h>
+#include <Core/FileManager.h>
 #include <Core/Settings.h>
 #include <Training/Server.h>
 
 DEFINE_SPADES_SETTING(cg_localPort, "32890");
-// Horde: the .vxl it plays, or none for the generated training map, and the
-// cell the core stands on (moved to the nearest land when that is at sea).
+// Horde: the .vxl it plays - or none, which plays the mode's own shipped
+// Termina Fields, the generated training course standing in for an install
+// whose paks lost it - and the cell the core stands on (moved to the
+// nearest land when that is at sea; the map's own settings .txt names
+// another cell, and its word outranks these).
 DEFINE_SPADES_SETTING(cg_hordeMap, "");
 DEFINE_SPADES_SETTING(cg_hordeCoreX, "256");
 DEFINE_SPADES_SETTING(cg_hordeCoreY, "256");
@@ -129,6 +133,19 @@ namespace spades {
 				cfg.map_file = hordeMap;
 				cfg.core_x = hordeCoreX;
 				cfg.core_y = hordeCoreY;
+				// The mode's own course ships in the paks with the game:
+				// Termina Fields, its .vxl and its settings .txt both, read
+				// the same way every other asset is read. A .vxl the setting
+				// names outranks it; a world whose paks lost it falls back
+				// to the generated course, the game still a game.
+				if (run.mode == training::Mode::Horde && hordeMap.empty() &&
+				    spades::FileManager::FileExists("Maps/Termina_FieldsTD.vxl")) {
+					cfg.map_data = spades::FileManager::ReadAllBytes("Maps/Termina_FieldsTD.vxl");
+					if (spades::FileManager::FileExists("Maps/Termina_FieldsTD.txt"))
+						cfg.map_settings =
+						    spades::FileManager::ReadAllBytes("Maps/Termina_FieldsTD.txt");
+					SPLog("[Training] the horde plays the shipped Termina Fields");
+				}
 				cfg.aim = self->aim;
 				cfg.log = [](const std::string& line) { SPLog("[Training] %s", line.c_str()); };
 				try {

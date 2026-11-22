@@ -23,6 +23,7 @@ every id registered or proposed in aosprotocol as of 13 November 2026.
 | 2      | Path        | Server -> Client | 11 + 3 n |
 | 3      | Turrets     | Server -> Client | 3 + 9 n |
 | 4      | Turret Shot | Server -> Client | 3    |
+| 5      | Core        | Server -> Client | 6    |
 
 ## What smoke is
 
@@ -183,6 +184,25 @@ when it fired.
 | Sub Packet ID | UByte         | `4`      | Always `4` for this sub-packet. |
 | Turret ID     | UByte         | `4`      | The gun that fired. |
 
+## Sub ID 5: Core
+
+The cell the server's core stands on and the plane of its column's top,
+so the flag a client draws as the core moves when the core does (the
+`/core` server command) - a move no vanilla packet can say: every one of
+them talks of a pickup, a drop or a capture that nobody made. Sent to
+clients that claimed version 3 on the same rhythm the guns are: at once
+when the core moved, whole again every few seconds, so a client that
+finished loading mid-game is told wherever the core stands now, whatever
+its own StateData said.
+
+| Field Name    | Field Type    | Example  | Notes |
+|---------------|---------------|----------|-------|
+| Packet ID     | UByte         | `0x7F`   | Always `0x7F`. |
+| Sub Packet ID | UByte         | `5`      | Always `5` for this sub-packet. |
+| X             | UShort        | `271`    | The core's cell. |
+| Y             | UShort        | `262`    | |
+| Z             | UByte         | `36`     | The plane of the column's top, the same cell StateData names. |
+
 ## Examples
 
 A smoke screen, 10 s, grey, with the hiss:
@@ -206,6 +226,10 @@ One level-2 gun, id 7, stood at (64, 32, 40) and locked on a walker:
 That gun firing, twice a second while it holds its aim:
 
     7F 04  07  (and again, each shot its own packet)
+
+The core moved to (271, 262), its column's top at plane 36:
+
+    7F 05  0F 01  06 01  24
 
 ## Later
 

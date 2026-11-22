@@ -42,6 +42,11 @@ struct HostConfig {
     // Horde: a .vxl map to play instead of the generated course, and the cell
     // the core stands on (moved to the nearest land when that cell is at sea).
     std::string map_file;
+    // The same map as bytes, when the game carries it - the mode's own
+    // course read out of the paks - and its settings .txt beside it. Set,
+    // they are played whatever map_file says; a map_file of a world that
+    // has neither still falls back to the generated course.
+    std::string map_data, map_settings;
     int core_x = 256, core_y = 256;
     // Aim: the run's status for the HUD, and its restart requests. Shared with
     // the game, which runs this server on a thread of its own.

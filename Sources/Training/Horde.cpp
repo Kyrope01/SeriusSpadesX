@@ -386,6 +386,12 @@ void Horde::recompute() {
 
 void Horde::on_map_edited() { field_dirty_ = true; }
 
+void Horde::move_core(int x, int y) {
+    cfg_.core_x = x;
+    cfg_.core_y = y;
+    field_dirty_ = true;
+}
+
 // --- walking ----------------------------------------------------------------
 
 bool Horde::next_step(int x, int y, int& tx, int& ty) {

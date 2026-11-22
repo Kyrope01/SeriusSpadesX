@@ -267,6 +267,10 @@ public:
     bool can_build(int x, int y, int z);
     // The map changed (built or destroyed): the field follows, debounced.
     void on_map_edited();
+    // The core moved to a cell already standing there (its column built
+    // and aired by its own word): the field walks the walkers to the new
+    // place at its own next reading, the same debounce an edit has.
+    void move_core(int x, int y);
 
     // Where a zombie at cell (x, y) should step: the neighbour of the lowest
     // field distance, which heads to the core around obstacles. False when

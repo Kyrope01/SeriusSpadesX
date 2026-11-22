@@ -28,8 +28,10 @@
 #include <cmath>
 
 #include "Client.h"
+#include "CTFGameMode.h"
 #include "IAudioDevice.h"
 #include "NetProtocol.h"
+#include "World.h"
 #include "SentryEntity.h"
 #include "SmokeSpriteEntity.h"
 #include <Core/Debug.h>
@@ -303,6 +305,28 @@ namespace spades {
 						return;
 					}
 					client.ServerTurretFired(static_cast<std::uint8_t>(r.ReadByte()));
+				} break;
+				case SmokeRegistry::kSubCore: {
+					// x y as i16 and the plane of the column's top as u8:
+					// the cell the core stands on, whose flag this moves -
+					// the only packet that can say a move, a vanilla one
+					// always telling of a capture or a drop nobody made.
+					if (r.GetNumRemainingBytes() < 2 + 2 + 1) {
+						SPLog("Dropped a Core of the wrong size");
+						return;
+					}
+					const auto x = static_cast<std::int16_t>(r.ReadShort());
+					const auto y = static_cast<std::int16_t>(r.ReadShort());
+					const auto z = static_cast<float>(r.ReadByte());
+					World* world = client.GetWorld();
+					if (!world)
+						break;
+					stmp::optional<IGameMode&> mode = world->GetMode();
+					if (mode && mode->ModeType() == IGameMode::m_CTF) {
+						auto& ctf = dynamic_cast<CTFGameMode&>(mode.value());
+						ctf.GetTeam(0).flagPos = MakeVector3(static_cast<float>(x) + 0.5F,
+						                                     static_cast<float>(y) + 0.5F, z);
+					}
 				} break;
 				default:
 					SPLog("Ignoring an unknown Smoke sub packet %d", sub);

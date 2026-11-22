@@ -322,4 +322,12 @@ void write_turret_shot(ByteWriter& bw, uint8_t turret_id) {
     bw.write_u8(turret_id);
 }
 
+void write_core(ByteWriter& bw, uint16_t x, uint16_t y, uint8_t z) {
+    bw.write_u8(static_cast<uint8_t>(PacketId::Smoke));
+    bw.write_u8(static_cast<uint8_t>(SmokeSub::Core));
+    bw.write_u16(x);
+    bw.write_u16(y);
+    bw.write_u8(z);
+}
+
 } // namespace proto

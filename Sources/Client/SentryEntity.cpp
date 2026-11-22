@@ -640,7 +640,7 @@ namespace spades {
 			} catch (...) {
 			}
 			try {
-				baseModel = r->RegisterModel("Models/Turrets/TurretBaseMG1.kv6");
+				baseModel = r->RegisterModel("Models/Turrets/TurretBaseMG.kv6");
 			} catch (...) {
 			}
 

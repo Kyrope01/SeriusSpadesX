@@ -283,7 +283,7 @@ void write_team_outfit(ByteWriter& bw, uint8_t team, uint8_t outfit);
 // bit 0 carries the hiss - a trail carries none, or the way in is a
 // racket rather than a marker. Only ever sent to a connection
 // that claimed the extension.
-enum class SmokeSub : uint8_t { Smoke = 0, Clear = 1, Path = 2, Turret = 3, TurretShot = 4 };
+enum class SmokeSub : uint8_t { Smoke = 0, Clear = 1, Path = 2, Turret = 3, TurretShot = 4, Core = 5 };
 enum class SmokeStyle : uint8_t { Cloud = 0, Column = 1, Ground = 2 };
 // The whole packet, id included: one smoke started.
 void write_smoke(ByteWriter& bw, uint8_t id, SmokeStyle style, const struct Vec3& origin,
@@ -335,5 +335,14 @@ void write_turrets(ByteWriter& bw, const std::vector<TurretState>& turrets);
 // The whole packet, id included: one gun's shot, sent the tick its damage
 // lands. Only ids that were in the last Turrets list, ever.
 void write_turret_shot(ByteWriter& bw, uint8_t turret_id);
+
+// One placed selected cell of the map and the plane of the column standing
+// on it (as write_turrets carries a gun's lower block, smaller z the
+// higher, and this is the plane of the core's own top): the smoke carries
+// moves of the core, which no vanilla packet can say - every one of them
+// speaks of a pickup, a drop or a capture that nobody here made. The z is
+// the same cell StateData would name, so a client that heard it and a
+// client that joined after draw the one flag.
+void write_core(ByteWriter& bw, uint16_t x, uint16_t y, uint8_t z);
 
 } // namespace proto

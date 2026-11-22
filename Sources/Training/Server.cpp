@@ -2400,21 +2400,30 @@ struct Server::Impl {
                 // a door a cube wide is a wall to the box. So one
                 // stroke takes the full flight: the strips run into
                 // the face one a block, and each strip stands its
-                // room a step higher than the strip before it,
-                // kStandHead tall, the tread of each strip the wall
-                // mass below - never touched. The lane holds its
-                // three widths, the core holds against every cell,
-                // and the air rides along unharmed: the stroke takes
-                // rock alone, and what it leaves is a stair the
-                // legs walk out of the moment it opens.
+                // room a step higher than the strip before it, the
+                // tread of each strip the wall mass below - never
+                // touched. THE ROOM STANDS kStandHead AND HOPS TWO
+                // MORE over it: a pocket just a body tall reads a
+                // floor to the field and a wall to the jump, the
+                // step the legs make of it being a hop that spends
+                // the crown of its arc against whatever ceiling the
+                // slot left standing - so a flight of body-tall
+                // rooms cuts a stair the dead walk under and never
+                // once take, and the gallery it mouths fills with
+                // the stuck, the very cave the pack was found
+                // milling in. Two clear over the stand is the arc
+                // the climb asks, and the stair the stroke leaves
+                // is a stair the dead actually climb. The lane
+                // holds its three widths, the core holds against
+                // every cell, and the air rides along unharmed.
                 for (int i = 0; i < kDigFlightDepth; ++i) {
                     const int sx = tx + fx * i;
                     const int sy = ty + fy * i;
                     for (int j = -1; j <= 1; ++j) {
                         const int bx = sx + lx * j;
                         const int by = sy + ly * j;
-                        for (int k = 0; k < horde::Config::kStandHead; ++k) {
-                            const int bz = fz - 2 - i + k;
+                        for (int k = 0; k < horde::Config::kStandHead + 2; ++k) {
+                            const int bz = fz - i - k;
                             if (bz < 0) continue;
                             if (!map.solid(bx, by, bz)) continue;
                             if (core_column_cell(bx, by, bz)) continue;

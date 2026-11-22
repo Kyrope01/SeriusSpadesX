@@ -121,6 +121,17 @@ constexpr int kDigFlightDepth = 3;
 // the rooms it cuts: whatever wall stands closer than three blocks
 // to the walking line comes down with the stroke.
 constexpr int kDigLaneMargin = 3;
+// The work holds the worker: a face a stroke has touched within this
+// window is a face the worker stays on. The worth gate and the advice
+// are read anew every tick, on a field recomputed every half second -
+// a reading that flips sends the leader off on the legs' own way the
+// very moment it flips back, and a dig that begins every other minute
+// is a dig that never ends: a stroke, a walk away, a return, a stroke,
+// the mill again with a spade in it. So a recent stroke buys the gate:
+// while the work feeds itself, the leader keeps it, and the moment
+// the strokes stop - the crossing open, the face gone - the window
+// passes and the walker walks whatever the fields say again.
+constexpr double kDigStaySeconds = 2.0;
 // A leader stalled this long - stuck past the windup, and not already
 // swinging at a wall it is opening for the line - loses its line for
 // a while: a follower owed prints it cannot walk reads the field for
@@ -2323,7 +2334,13 @@ struct Server::Impl {
                                    world_time - p.dig_watch_at >= kDigWatchSeconds &&
                                    world_time - p.spade_at >= horde_cfg.dig_seconds;
         const bool licensed = stuck_licence || watch_licence;
-        if (leg_led && !horde->dig_worth(cx, cy, fz) && !licensed)
+        // The grip of work: a stroke within kDigStaySeconds keeps the
+        // gate and the advice both, so a face once begun is a face
+        // that gets finished, whatever the field's half-second churn
+        // reads into the worth of it mid-hammer.
+        const bool working = world_time - p.spade_at < kDigStaySeconds;
+        if (leg_led && !horde->dig_worth(cx, cy, fz) && !licensed &&
+            !working)
             return false;
         int tx = cx, ty = cy, tz = fz;
         if (!horde->next_dig_step(cx, cy, fz, tx, ty, tz)) {
@@ -2331,13 +2348,15 @@ struct Server::Impl {
             // stuck head faces prices nothing downhill, whatever its
             // height: without this second reading the licence the
             // comment above promises would be a no-op, the advice
-            // silent at every wall in the land. So the licensed head
-            // reads the one column it faces straight off the map:
+            // silent at every wall in the land. So the licensed head -
+            // or the working head, whose grip on its face outlasts a
+            // reading that merely churned - reads the one column it
+            // faces straight off the map:
             // solid at its own foot level, up to that run's own top,
             // chipped from the top, a stroke a voxel, until the climb
             // is one the legs make after all - and the field, freshly
             // recomputed, pours the pack through the breach.
-            if (!licensed) return false;
+            if (!licensed && !working) return false;
             const float ox = std::fabs(p.body.ori.x),
                         oy = std::fabs(p.body.ori.y);
             int sx = 0, sy = 0;
@@ -2542,6 +2561,7 @@ struct Server::Impl {
                 q->walk_ref = dest;
                 q->walk_ref_at = world_time;
                 q->teleport_at = world_time;
+                q->spade_at = -1e9;   // the carried hold no face behind them
             }
             log("the road carried a pinned pack %d treads, to %d, %d",
                 static_cast<int>(i), at.x, at.y);

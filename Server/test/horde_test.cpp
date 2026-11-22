@@ -582,7 +582,7 @@ void test_dig() {
 // the wave still rises on the ground it was dealt. The Horde's default
 // stays off, so the rounds above read their fixed corners as ever.
 void test_roam() {
-    std::printf("[roam] the quarters dealt each wave, spread round the town\n");
+    std::printf("[roam] the quarters dealt as each wave falls, spread round the town\n");
     SolidMap map;
     plain(map);
     horde::Config cfg = horde_cfg(256, 256);
@@ -599,6 +599,17 @@ void test_roam() {
           "the dealt anchor stands on the map");
     check(h.distance(ax, ay) > 100,
           "the dealt way in is far from the core, whatever quarter drew it");
+    // The round wave one stood in, every corner of it, kept for the
+    // comparison the fall must turn.
+    int first_x[horde::Config::kSpawnSites];
+    int first_y[horde::Config::kSpawnSites];
+    int anchored = 0;
+    for (int c = 0; c < horde::Config::kSpawnSites; ++c) {
+        first_x[c] = -1;
+        first_y[c] = -1;
+        if (h.corner_anchor(c, first_x[c], first_y[c])) ++anchored;
+    }
+    check(anchored > 0, "every quarter of the dealt round anchors a way in");
     std::vector<horde::SpawnAt> due;
     h.take_due(due, 100.0);
     bool on_ground = true;
@@ -610,6 +621,19 @@ void test_roam() {
     check(h.wave_cleared(), "the dealt wave clears like any other");
     h.tick(100.5);
     check(h.phase() == horde::Phase::Intermission, "the dealt wave turns");
+    // The next round is dealt at the fall itself, so the intermission
+    // the town builds in already reads it: one tick for the mending
+    // phase's own scout, then the anchors say the quarters the NEXT wave
+    // will stand in - the trail painted between the waves is the true
+    // one, not the wave before's.
+    h.tick(100.6);
+    bool moved = false;
+    for (int c = 0; c < horde::Config::kSpawnSites; ++c) {
+        int bx = -1, by = -1;
+        if (!h.corner_anchor(c, bx, by)) continue;
+        if (bx != first_x[c] || by != first_y[c]) moved = true;
+    }
+    check(moved, "the intermission already reads the next wave's round");
     h.tick(106.0);
     check(h.phase() == horde::Phase::Wave && h.wave() == 2,
           "wave two comes with a deal of its own");

@@ -42,12 +42,14 @@ size_t cell_index(int x, int y) {
 Horde::Horde(const SolidMap& map, const Config& cfg) : map_(map), cfg_(cfg) {
     core_hp_ = cfg_.core_hp;
     // The asked-for centres begin as the settings name them (the tests'
-    // fixed quarters); roam() redraws them a wave at a time when the
-    // config asks for it.
+    // fixed quarters); the first round is dealt over them at birth and a
+    // new one as each wave falls, when the config asks for it, so the
+    // prep's own trail already points where the wave truly comes from.
     for (int c = 0; c < Config::kSpawnSites; ++c) {
         roam_x_[c] = cfg_.spawn_x[c];
         roam_y_[c] = cfg_.spawn_y[c];
     }
+    if (cfg_.roam_spawns) roam();
     recompute();
 }
 
@@ -809,10 +811,13 @@ bool Horde::can_build(int x, int y, int z) {
 // players pass through players in this game, and the crowd's push
 // splits the pile apart as it walks. The anchors are kept.
 // The asking dealt again, a wave at a time: the asked-for centre of
-// every corner is redrawn where each wave stands up, so a front keeps
-// its colour but not its ground - the orange way in moves between the
-// waves, and no colour camps one quarter of the world the whole game
-// long. The spread round the town stays even all the same: the compass
+// every corner is redrawn the moment the wave before falls, so a front
+// keeps its colour but not its ground - the orange way in moves between
+// the waves, and no colour camps one quarter of the world the whole game
+// long - and, dealt at the fall, the round is on the table before the
+// intermission it precedes: the trail the mending town paints shows the
+// quarters the next wave will truly come from, not the ones the last
+// did. The spread round the town stays even all the same: the compass
 // is cut in as many sectors as there are corners, the sectors are dealt
 // to the corners shuffled, and a corner's centre is drawn inside its
 // own sector alone, so the wave's fronts - the ranked first of the dealt
@@ -857,7 +862,8 @@ void Horde::roam() {
         roam_y_[c] = y;
     }
     // A new asking: the reading that stood on the old centres is spent,
-    // and the scout - this wave's own, in place_wave - reads it fresh.
+    // and the scout - the intermission's own reading, before the wave
+    // stands up - reads it fresh.
     scouted_ = false;
 }
 
@@ -1003,10 +1009,6 @@ void Horde::scout() {
 // floors - the leader leads, the rest hold at its heel - and the anchors
 // are the scout's, so the host paints the route the wave truly takes.
 void Horde::place_wave(double now) {
-    // This wave's own asking, dealt anew (roam_spawns): the fronts keep
-    // their colours and move their quarters, and the scout below then
-    // reads them fresh.
-    if (cfg_.roam_spawns) roam();
     if (!scouted_) scout();   // the reading only moves with the field
     const int n = cfg_.wave_zombies(wave_);
     const int nc = cfg_.wave_points(wave_);
@@ -1205,6 +1207,12 @@ void Horde::tick(double now) {
                 phase_ = Phase::Intermission;
                 phase_until_ = now + cfg_.intermission_seconds;
                 core_hp_ = (std::min)(cfg_.core_hp, core_hp_ + cfg_.core_mend);
+                // The next wave's asking is dealt the moment this one
+                // falls, not when the next stands up: the intermission
+                // that follows - the town's one quiet moment to build
+                // in - already paints the trail of the quarters the
+                // next wave will truly come from.
+                if (cfg_.roam_spawns) roam();
             }
             break;
         case Phase::Intermission:

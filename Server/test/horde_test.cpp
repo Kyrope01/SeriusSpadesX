@@ -603,11 +603,13 @@ void test_dig() {
                     map.set_block(x, y, z, true);  // the mass the room hides in
         for (int y = 255; y <= 257; ++y)
             for (int x = 255; x <= 257; ++x)
-                for (int z = 36; z <= 38; ++z)
-                    map.set_block(x, y, z, false);  // the room, its floor at 39
-        map.set_block(256, 256, 36, false);  // the headroom over the marker
-        map.set_block(256, 256, 37, true);   // the core's own blocks kept:
-        map.set_block(256, 256, 38, true);   // the marker names its top, 37
+                for (int z = 35; z <= 38; ++z)
+                    map.set_block(x, y, z, false);  // the room: four open
+                                                  // voxels, its floor at 39
+        map.set_block(256, 256, 37, true);   // the core's own blocks kept,
+        map.set_block(256, 256, 38, true);   // the marker names its top, 37 -
+                                             // headroom two deep, a floor the
+                                             // dead could stand on
         horde::Config cfg = horde_cfg(256, 256);
         cfg.core_top_z = 37;
         horde::Horde h(map, cfg);

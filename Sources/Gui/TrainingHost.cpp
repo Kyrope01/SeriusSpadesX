@@ -145,6 +145,14 @@ namespace spades {
 						cfg.map_settings =
 						    spades::FileManager::ReadAllBytes("Maps/Termina_FieldsTD.txt");
 					SPLog("[Training] the horde plays the shipped Termina Fields");
+				} else if (run.mode == training::Mode::Horde && hordeMap.empty()) {
+					// The paks carry the course with the game (Resources/mkpak
+					// packs Maps into pak005); an install whose paks are stale
+					// says so here instead of quietly standing the generated
+					// course in for Termina Fields.
+					SPLog("[Training] no shipped Termina Fields in the game's"
+					      " files: rebuild the paks (Resources/mkpak) or the"
+					      " generated course stands in");
 				}
 				cfg.aim = self->aim;
 				cfg.log = [](const std::string& line) { SPLog("[Training] %s", line.c_str()); };

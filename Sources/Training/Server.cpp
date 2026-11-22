@@ -2396,9 +2396,21 @@ struct Server::Impl {
                 return false;   // facing nowhere in particular: no call
             tx = cx + sx;
             ty = cy + sy;
-            if (!map.solid(tx, ty, fz - 1))
+            // A face may hang as well as stand: a lip of the hill
+            // riding over a passage corners the walker as surely as
+            // a chest high wall does, and the one trapped under it
+            // reads solid overhead at the walking head with open air
+            // below - every field and every probe keyed on the
+            // chest cell saw no wall there at all, and the mouth
+            // starved with the spade holstered. The lip is a face to
+            // stand against the same: its run starts at the hanging
+            // cell and climbs to its own crest.
+            const bool hanging =
+                !map.solid(tx, ty, fz - 1) &&
+                 map.solid(tx, ty, fz - 2);
+            if (!hanging && !map.solid(tx, ty, fz - 1))
                 return false;   // nothing to stand against at the feet
-            int z = fz - 1;
+            int z = hanging ? fz - 2 : fz - 1;
             while (z > 0 && map.solid(tx, ty, z - 1)) --z;   // the run's top
             tz = z;
         }
@@ -2440,8 +2452,20 @@ struct Server::Impl {
             const int kFy[4] = {0, 0, 1, -1};
             for (int n = 0; n < 4; ++n) {
                 const int nx = cx + kFx[n], ny = cy + kFy[n];
-                if (!map.solid(nx, ny, fz - 1)) continue;
-                int z0 = fz - 1;
+                // The hanging face ranks here as well: open at the
+                // chest and solid at the walking head is a wall the
+                // body cannot walk under, and a passage mouthed
+                // under such a lip starved whole packs - the old
+                // probe called it no wall at all, no face was found,
+                // and the spade stayed down while no surface the
+                // walk could price existed under the lip. The run
+                // of a hanging face climbs from its lowest hung
+                // cell, and its crest ranks against the rest.
+                const bool hanging =
+                    !map.solid(nx, ny, fz - 1) &&
+                     map.solid(nx, ny, fz - 2);
+                if (!hanging && !map.solid(nx, ny, fz - 1)) continue;
+                int z0 = hanging ? fz - 2 : fz - 1;
                 while (z0 > 0 && map.solid(nx, ny, z0 - 1)) --z0;
                 const int c0 = fz - z0;
                 if (c0 > best) {

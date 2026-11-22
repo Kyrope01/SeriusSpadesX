@@ -1,7 +1,7 @@
 name: Release
 # Started by hand (Actions tab -> Release -> Run workflow) with a version, e.g.
 # v0.3.0: builds every platform through ci.yml (the Quest APK signed with the
-# release key), then tags the commit and publishes "ZeroSpades X 0.3.0" with
+# release key), then tags the commit and publishes "XRS_TD 0.3.0" with
 # every package and their SHA256SUMS. The version must be CMakeLists.txt's
 # ZEROSPADES_VERSION_*: the game and its update checker read that one.
 on:
@@ -85,11 +85,11 @@ jobs:
             platform="${name#ZeroSpadesX-}"
             if [ "$name" = "ZeroSpadesX-quest3-apk" ]; then
               gh api "repos/${{ github.repository }}/actions/artifacts/${id}/zip" > apk.zip
-              unzip -p apk.zip ZeroSpadesX-quest3.apk > "release-assets/ZeroSpadesX-${VERSION}-quest3.apk"
-              list+="* **ZeroSpadesX-${VERSION}-quest3.apk**: for Meta Quest 3, standalone (sideload; installs over earlier builds and keeps your settings)."$'\n'
+              unzip -p apk.zip ZeroSpadesX-quest3.apk > "release-assets/XRS_TD-${VERSION}-quest3.apk"
+              list+="* **XRS_TD-${VERSION}-quest3.apk**: for Meta Quest 3, standalone (sideload; installs over earlier builds and keeps your settings)."$'\n'
               continue
             fi
-            asset="ZeroSpadesX-${VERSION}-${platform}.zip"
+            asset="XRS_TD-${VERSION}-${platform}.zip"
             gh api "repos/${{ github.repository }}/actions/artifacts/${id}/zip" > "release-assets/${asset}"
 
             # Fail now rather than publish a package whose launcher cannot run
@@ -120,9 +120,9 @@ jobs:
           done < artifacts.tsv
 
           for want in windows-x64 windows-x86 macos-arm64 macos-intel linux-x64 linux-nix; do
-            [ -f "release-assets/ZeroSpadesX-${VERSION}-${want}.zip" ] || { echo "::error::no ${want} package"; exit 1; }
+            [ -f "release-assets/XRS_TD-${VERSION}-${want}.zip" ] || { echo "::error::no ${want} package"; exit 1; }
           done
-          [ -s "release-assets/ZeroSpadesX-${VERSION}-quest3.apk" ] || { echo "::error::no Quest APK"; exit 1; }
+          [ -s "release-assets/XRS_TD-${VERSION}-quest3.apk" ] || { echo "::error::no Quest APK"; exit 1; }
 
           (cd release-assets && sha256sum * > SHA256SUMS)
 
@@ -151,7 +151,7 @@ jobs:
         run: |
           gh release create "$VERSION" \
             --repo "${{ github.repository }}" \
-            --title "ZeroSpades X ${VERSION#v}" \
+            --title "XRS_TD ${VERSION#v}" \
             --target "${{ github.sha }}" \
             --generate-notes \
             --notes-file notes.md \

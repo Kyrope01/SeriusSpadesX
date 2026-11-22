@@ -13,13 +13,13 @@
 // built since - a wall's top is one surface, and the floor of a tunnel
 // through it is another, so the walk goes under as well as over, and no
 // gate an arch leaves standing closes a town. The dead walk, and they dig
-// when the digging pays: besides the legs' own reversible walk there is a
-// second field, the spade's walk - the falls up to kFall come back into it
-// and a climb beyond the jump is crossed at kDigPenalty steps a block, the
-// time its spade takes that block off - and the spade's way is consulted
-// only where the legs' way is silent or the spade's way home saves more
-// than kDigShortcut of the legs' own steps, so the dead scale a wall only
-// when going around it is the longer errand. The legs' own walk keeps its
+// only when their legs fail them at it: besides the legs' own reversible
+// walk there is a second field, the spade's walk - the falls up to kFall
+// come back into it and a climb beyond the jump is crossed at kDigPenalty
+// steps a block, the time its spade takes that block off - and the spade's
+// way is consulted only on a licence of the pinned - the stuck clock run
+// out, the dig watch run down - so the dead scale a wall only when their
+// own legs fail them at it. The legs' own walk keeps its
 // crossings reversible - a step of kWalkClimb up or down is a jump, and
 // anything more is a wall. The walk also keeps to the open: a cell hedged by a
 // wall on either side of the step is priced dearer than one with a
@@ -163,11 +163,9 @@ struct Config {
     // stands on surfaces, and a floor a body cannot stand under is none.
     // The knobs of it, for the balance phase to turn: `dig` is the
     // licence whole (the walk one way, the veto and the anchors stay the
-    // legs' own), kDigShortcut is how much of the legs' own way home the
-    // spade's way must save before any walker takes it - the legs' walk
-    // silent at a walker's feet counts as saving it all - and
-    // dig_seconds is the host's own pace of the work, one voxel of the
-    // crossing taken off a dig_seconds - the living digger's own rhythm,
+    // legs' own), and dig_seconds is the host's own pace of the work,
+    // one voxel of the crossing taken off a dig_seconds - the living
+    // digger's own rhythm,
     // three blocks the second. The walk's price of a block is kDigPenalty
     // steps a block, and the two are separate knobs of it: the price says
     // which walls are worth the errand, the pace says how fast a chosen
@@ -189,7 +187,6 @@ struct Config {
     static constexpr int kStandHead = 3;
     static constexpr int kFall = 63, kDigPenalty = 6;
     bool dig = true;
-    static constexpr int kDigShortcut = 50;
     double dig_seconds = 1.0 / 3.0;
     // A crossing that changes floor is a crossing apart: the pack walks
     // best on one level, and every block of climb or drop it spends is
@@ -324,19 +321,8 @@ public:
     // nothing to say; nothing is steered towards the core on a straight
     // line here, for the dig advice is only asked where the legs' advice
     // has already failed, and a straight line through a wall is how the
-    // wall got its crowd. Consulted only when dig_worth says so.
+    // wall got its crowd. Consulted only on a licence of the pinned.
     bool next_dig_step(int x, int y, int z, int& tx, int& ty, int& tz);
-    // Whether the spade's way is worth the walker's while, read at its
-    // feet: true when the legs' walk is silent on the floor the feet
-    // stand on (no way home the legs can take from THERE), or when the
-    // dig walk's way home from that same floor is shorter by at least
-    // kDigShortcut steps - the shortcut priced dear as it is, only an
-    // important one is taken. The legs are asked on the same storey the
-    // spade is: another floor of the same column is another world, and
-    // the road under a sealed roof is no shorter for the body standing
-    // on that roof. False when the dig is off or its walk has no way
-    // home either.
-    bool dig_worth(int x, int y, int z) const;
     // Whether a cell is within `cells` of the core in the plan - the
     // height is no part of it; the teeth add the column's level, the
     // host's zombie_at_core, so a walker stands ON things, not near them.
@@ -459,8 +445,7 @@ private:
     std::vector<int32_t> dist_;
     // The spade's own field: the same surfaces, the dig walk's own prices
     // on the crossings between them. Its distance is never higher than
-    // the legs' own, and it is only read where the legs' reading fails or
-    // where the price of it buys a shortcut worth its while.
+    // the legs' own, and it is only read on the licences of the pinned.
     std::vector<int32_t> dig_dist_;
     std::vector<int16_t> surf_z_;
     std::vector<int8_t> surf_n_;

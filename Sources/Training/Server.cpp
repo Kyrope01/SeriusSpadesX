@@ -86,12 +86,13 @@ constexpr double kPounceAgain = 1.2;     // and this long between two of them
 // seconds of going nowhere by the field's own count, and the hop and
 // the fling the standstill gets are let loose again.
 constexpr int kZombieYoyoWindows = 6;
-// The stuck head's licence: the shortcut gate the spade's worth is
-// measured by is a frugal one - fifty steps of detour before the wall
-// comes down - and a maze of short walls is a town of detours too brief
-// for it, so the pack that faces one paces and hops and never draws
-// the spade at all. A head stuck past its windup, and not resting on
-// the spade's own cadence at a wall it is already opening, owes the
+// The stuck head's licence: the road is the road, and the spade is a
+// rescue only - a wall that can be walked around is walked around for
+// however long the detour runs, and a maze the living raise is
+// honoured to the last of its turns, for the pack that faces one paces
+// and hops and never draws the spade at all. A head stuck past its
+// windup, and not resting on the spade's own cadence at a wall it is
+// already opening, owes the
 // licence anyway: the gate opens, and the crossing the spade's field
 // names is opened in turn, wall or ceiling, top down at the dig's own
 // pace.
@@ -122,8 +123,8 @@ constexpr int kDigFlightDepth = 3;
 // to the walking line comes down with the stroke.
 constexpr int kDigLaneMargin = 3;
 // The work holds the worker: a face a stroke has touched within this
-// window is a face the worker stays on. The worth gate and the advice
-// are read anew every tick, on a field recomputed every half second -
+// window is a face the worker stays on. The licence gate and the
+// advice are read anew every tick, on a field recomputed every half second -
 // a reading that flips sends the leader off on the legs' own way the
 // very moment it flips back, and a dig that begins every other minute
 // is a dig that never ends: a stroke, a walk away, a return, a stroke,
@@ -132,14 +133,6 @@ constexpr int kDigLaneMargin = 3;
 // the strokes stop - the crossing open, the face gone - the window
 // passes and the walker walks whatever the fields say again.
 constexpr double kDigStaySeconds = 2.0;
-// The road keeps its walker the same span: the worth gate reads every
-// tick on fields recomputed every half second, and a leader parked
-// where the shortcut and the road price the same reads yes and no in
-// turns - a pace of one, a swing of the other, back and forth, and
-// neither way ever gets walked. Every no of the gate anchors the
-// walker to the road, and the gate hands the spade back only when a
-// yes has held this long: the leader leaves, one way or the other.
-constexpr double kDigFlipSeconds = 2.0;
 // A leader stalled this long - stuck past the windup, and not already
 // swinging at a wall it is opening for the line - loses its line for
 // a while: a follower owed prints it cannot walk reads the field for
@@ -557,11 +550,6 @@ struct Player {
     // its windows apart - a digger stands by design, and the hop and the
     // fling would only spoil its work.
     double spade_at = -1e9;
-    // When the worth gate last said no: every refusal anchors the road
-    // here, and the road holds its walker the same span a stroke holds
-    // a face, so the call between the shortcut and the road is made
-    // once and kept, not flipped at every read of the gate.
-    double walk_since = -1e9;
     // The spawn point it walked in on: the corner its pack belongs to, so
     // a front's trail says itself from its own pack's head, in its own
     // colour. A person's is nobody's.
@@ -1315,7 +1303,6 @@ struct Server::Impl {
             p.foot_dist = -1;
             p.stall_windows = 0;
             p.dig_watch_at = -1.0;
-            p.walk_since = -1e9;   // born free to call it either way
             p.alive = true;
             p.tool = kToolWeapon;
             if (p.zombie) p.tool = kToolSpade;   // it never fires a shot
@@ -2303,9 +2290,9 @@ struct Server::Impl {
     }
 
     // The spade's lead: the dig walk's advice, for a walker the legs'
-    // advice has nothing for, or nothing worth its while - `leg_led` says
-    // which question this is. The crossing the dig walk hands back may
-    // be a step the legs make after all, a drop walked straight off (the
+    // advice has nothing for - `leg_led` says which question this is.
+    // The crossing the dig walk hands back may be a step the legs make
+    // after all, a drop walked straight off (the
     // dead fear no landing), or a climb beyond the jump: and a climb is
     // the spade's own work. The walker plants itself facing the column
     // it cannot take and empties the crossing's top off it, one voxel a
@@ -2320,22 +2307,20 @@ struct Server::Impl {
     // ceiling: a drop the walk promises through rock that was never
     // opened is not walked but carved, its first solid voxel off, one a
     // stroke, until the fall stands in honest air and the body takes it.
-    // False when the licence is off, the walker
-    // is aloft, the dig walk is silent, or the legs' way is nearly as
-    // soon; the walker is left to the legs' own answers. Stuck past a
-    // windup, the head earns the licence anyway: a wall faced long
-    // enough is worth the spade whatever the detour it saves.
+    // False when the licence is off, the walker is aloft, or no
+    // clock of the pinned has run out yet; the walker is left to the
+    // legs' own answers. Stuck past a windup, the head earns the
+    // licence anyway: a wall faced long enough is worth the spade.
     bool dig_lead(Player& p, bool leg_led) {
         if (!horde_mode() || !horde_cfg.dig || p.body.airborne) return false;
         const int cx = static_cast<int>(std::floor(p.body.pos.x));
         const int cy = static_cast<int>(std::floor(p.body.pos.y));
         const int fz = static_cast<int>(std::floor(p.body.pos.z + 2.25f));
-        // The stuck head's licence: worth is a frugal gate - fifty
-        // steps of detour saved before the spade draws - and the maze
-        // of short walls never owes that much. A head stuck past the
-        // windup, and not resting on the spade's own cadence at a wall
-        // it already opens, is granted the licence anyway: whatever
-        // the detour saves, the wall in its face comes down.
+        // The stuck head's licence: the road is the road, and the
+        // spade stays holstered while the legs make ground. A head
+        // stuck past the windup, and not resting on the spade's own
+        // cadence at a wall it already opens, is granted the licence:
+        // the wall in its face comes down.
         const bool stuck_licence = p.stuck_at >= 0.0 &&
                                    world_time - p.stuck_at >= kStuckDigWindup &&
                                    world_time - p.spade_at >= horde_cfg.dig_seconds;
@@ -2351,25 +2336,23 @@ struct Server::Impl {
         // The grip of work: a stroke within kDigStaySeconds keeps the
         // gate and the advice both, so a face once begun is a face
         // that gets finished, whatever the field's half-second churn
-        // reads into the worth of it mid-hammer.
+        // reads into the value of it mid-hammer.
         const bool working = world_time - p.spade_at < kDigStaySeconds;
-        // One way or the other, and the call sticks: a refusal anchors
-        // the walker on the road, a stroke anchors the face, and
-        // neither releases its hold inside its window. Without the
-        // anchor, a leader standing where the shortcut and the road
-        // price alike swings between the two for as long as the fields
-        // keep flipping the gate - digging a moment, walking a moment,
-        // arriving at neither: the very milling this hunt set out to
-        // end.
-        if (leg_led && !horde->dig_worth(cx, cy, fz) && !licensed &&
-            !working) {
-            p.walk_since = world_time;   // the road renews its hold
+        // THE ROAD IS THE ROAD: the spade is a rescue and only that.
+        // A shortcut priced against the walk is a coin flipped at
+        // every read of a field that recomputes every half second,
+        // and a leader standing where the road and the wall price
+        // alike spent its whole march swinging between the two - a
+        // stroke, a step, a stroke again, and neither way ever
+        // walked; and a maze the living raise is a wall to honour,
+        // not the hint of a tunnel. So the leader walks its road the
+        // whole way, and the spade comes out only for the pinned and
+        // the milling - the stuck clock run out, the watch run down,
+        // a zone walked without a step of ground gained - and a
+        // stroke already landing keeps its face while the strokes
+        // keep feeding it.
+        if (leg_led && !licensed && !working)
             return false;
-        }
-        if (p.walk_since >= 0.0 &&
-            world_time - p.walk_since < kDigFlipSeconds)
-            return false;   // the refusal is still fresh on its hold
-        p.walk_since = -1e9;
         int tx = cx, ty = cy, tz = fz;
         if (!horde->next_dig_step(cx, cy, fz, tx, ty, tz)) {
             // The walk only ever hands downhill over - and the wall a
@@ -2652,7 +2635,6 @@ struct Server::Impl {
                 q->walk_ref_at = world_time;
                 q->teleport_at = world_time;
                 q->spade_at = -1e9;   // the carried hold no face behind them
-                q->walk_since = -1e9;   // and hold no refusal either
             }
             log("the road carried a pinned pack %d treads, to %d, %d",
                 static_cast<int>(i), at.x, at.y);
@@ -2865,10 +2847,10 @@ struct Server::Impl {
             const bool led =
                 (!p.body.airborne && horde->next_step(cx, cy, fz, tx, ty)) ||
                 horde->next_step(cx, cy, tx, ty);
-            // The spade's second opinion, taken when it pays: the dig
-            // walk's way home is worth the lead when the legs' own is
-            // silent underfoot or longer by more than the spade's price,
-            // and where it says climb, the head digs and the line waits.
+            // The spade's second opinion, taken on the licences of the
+            // pinned: the stuck clock run out, the watch run down - and
+            // where the dig walk says climb, the head digs and the line
+            // waits.
             const bool digs = dig_lead(p, led);
             if (led && !digs) {
                 // The cell handed back is a square the legs are steered into,

@@ -458,9 +458,8 @@ void Horde::recompute() {
     // The walk without the spade: what legs can cross, and stairs when they
     // cannot. And the spade's own field beside it: the same surfaces, the
     // crossings the legs refuse taken at their price, so the host has a
-    // way home to hand wherever the legs' walk falls silent, and knows
-    // when the price of it buys a shortcut worth its while. One recompute
-    // fills both.
+    // way home to hand wherever the legs' walk falls silent, for the
+    // licences of the pinned to ask. One recompute fills both.
     flood(dist_, -1, -1, false);
     flood(dig_dist_, -1, -1, true);
     field_dirty_ = false;
@@ -642,26 +641,6 @@ bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty) {
     tx = bx;
     ty = by;
     return true;
-}
-
-// Whether the spade's way is worth the walker's while, read at its feet:
-// the legs' own walk has to be silent on the floor the feet stand on - no
-// way home the legs can take from there - or the dig walk's way home must
-// be shorter by at least kDigShortcut of the legs' own steps. The dig
-// walk's crossings are
-// already priced dear; this is the second gate, the one that keeps the
-// spade holstered while a walk of legs gets there nearly as soon.
-bool Horde::dig_worth(int x, int y, int z) const {
-    if (!cfg_.dig) return false;
-    const int kd = near_dig_state(x, y, z);
-    if (kd < 0) return false;
-    const int dg = dig_dist_[cell_index(x, y) * kSurfMax + kd];
-    if (dg < 0) return false;
-    // The legs read on the same floor the spade is asked about: another
-    // storey of the same column is another world, and the road under a
-    // sealed roof is no shorter for the body standing on that roof.
-    const int leg = dist_[cell_index(x, y) * kSurfMax + kd];
-    return leg < 0 || dg + Config::kDigShortcut <= leg;
 }
 
 // The spade's advice: a downhill read on the dig walk's own field, taken

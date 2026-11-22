@@ -2588,9 +2588,16 @@ struct Server::Impl {
         // A fresh one is spared for its first seconds: it walks out of the
         // pile through its own, and they walk through it, until the wave
         // has its shape back.
+        // And the pack's own head is no source of the push, for the head
+        // is the very door the line pours through: the breach it opens
+        // stands on the ground its own two feet hold, and a heel shoved
+        // off the one that opens the way is a heel kept from the way
+        // forever - the pack masses at its head and pours past it, the
+        // leader keeps its ground.
         Vec3 sep{};
         for (const auto& qq : players) {
             if (!qq || qq.get() == &p || !qq->zombie || !qq->alive) continue;
+            if (qq->ahead_id < 0) continue;   // the head is the door
             if (world_time - qq->born_at < kZombieSettle) continue;
             const float dx = p.body.pos.x - qq->body.pos.x;
             const float dy = p.body.pos.y - qq->body.pos.y;
@@ -2863,15 +2870,24 @@ struct Server::Impl {
             if (moved < 0.35f ||
                 p.stall_windows >= kZombieYoyoWindows) {
                 // A heel held is a place kept, not a standstill: within
-                // the sight of the one ahead, the window is shelved.
+                // the sight of the one ahead on LEVEL ground the window
+                // is shelved - but a heel one step down the stair holds
+                // no place at all, the place itself stands a step up,
+                // and the hop the climb asks is owed however close the
+                // one ahead stands: a line that cannot hop while its
+                // own head is in sight is a line that never takes a
+                // stair, and the mouth of it fills with the stuck.
                 if (ahead && ahead->id != p.id && ahead->zombie &&
                     ahead->alive) {
                     const float sdx = ahead->body.pos.x - p.body.pos.x;
                     const float sdy = ahead->body.pos.y - p.body.pos.y;
                     if (sdx * sdx + sdy * sdy <
                         kHeelSight * kHeelSight) {
-                        p.stuck_at = -1.0;
-                        return;
+                        if (std::fabs(ahead->body.pos.z - p.body.pos.z) <
+                            1.0f) {
+                            p.stuck_at = -1.0;
+                            return;
+                        }
                     }
                 }
                 if (p.stuck_at < 0.0) p.stuck_at = world_time;

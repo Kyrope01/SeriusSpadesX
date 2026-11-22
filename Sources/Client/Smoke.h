@@ -45,6 +45,9 @@ namespace spades {
 		 *     0  Smoke        S->C  id(1) style(1) x y z(4 each) radius(1) r g b
 		 *                           opacity(1 each) duration(2) fade(1) flags(1)
 		 *     1  Clear Smoke  S->C  id(1)   255: every smoke
+		 *     2  Path         S->C  id(1) r g b(1 each) count(1) then the way
+		 *                           as its turns: the first x y z as x(2) y(2)
+		 *                           z(1), each later one a byte of delta apiece
 		 */
 		struct SmokeParams {
 			// 0 spreads as a wide cloud, 1 rises as a thin column, 2 gathers
@@ -93,6 +96,10 @@ namespace spades {
 			static constexpr std::uint8_t kPacketId = 64 + kExtensionId;
 			static constexpr std::uint8_t kSubSmoke = 0;
 			static constexpr std::uint8_t kSubClear = 1;
+			/** Version 2 of the extension: the same negotiation, one more
+			 * sub packet, the paths a v1 client ignores on arrival. */
+			static constexpr std::uint8_t kVersion = 2;
+			static constexpr std::uint8_t kSubPath = 2;
 
 			/** The stop flag for a new smoke; an id in use stops the old one. */
 			std::shared_ptr<bool> Start(int id);

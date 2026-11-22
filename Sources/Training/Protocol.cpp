@@ -263,4 +263,37 @@ void write_smoke_clear(ByteWriter& bw, uint8_t id) {
     bw.write_u8(id);
 }
 
+void write_path(ByteWriter& bw, uint8_t id, uint8_t r, uint8_t g, uint8_t b,
+                const std::vector<PathPoint>& points) {
+    bw.write_u8(static_cast<uint8_t>(PacketId::Smoke));
+    bw.write_u8(static_cast<uint8_t>(SmokeSub::Path));
+    bw.write_u8(id);
+    bw.write_u8(r);
+    bw.write_u8(g);
+    bw.write_u8(b);
+    // A count past the client's byte is the count it is sent as: the path
+    // simply ends where its points ran out, still a line to somewhere.
+    const uint8_t count = static_cast<uint8_t>(
+        points.size() > 255 ? 255 : points.size());
+    bw.write_u8(count);
+    if (count == 0) return;
+    bw.write_u16(static_cast<uint16_t>(points[0].x));
+    bw.write_u16(static_cast<uint16_t>(points[0].y));
+    bw.write_u8(points[0].z);
+    for (uint8_t k = 1; k < count; ++k) {
+        // The deltas are signed in the wire's byte; the caller cuts its
+        // runs to spans, and a span that slips past the byte is clamped
+        // here rather than wrapped: the line bends to where it can be
+        // said, not somewhere a wrap would put it.
+        auto cut = [](int d) -> int8_t {
+            if (d > 127) d = 127;
+            if (d < -128) d = -128;
+            return static_cast<int8_t>(d);
+        };
+        bw.write_i8(cut(points[k].x - points[k - 1].x));
+        bw.write_i8(cut(points[k].y - points[k - 1].y));
+        bw.write_i8(cut(points[k].z - points[k - 1].z));
+    }
+}
+
 } // namespace proto

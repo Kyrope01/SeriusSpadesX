@@ -764,6 +764,10 @@ namespace spades {
 				for (const auto& ent : localEntities)
 					ent->Render3D();
 
+				// The ways in, drawn as crumbs wherever the dead are
+				// coming from: after the rest, a marker over all of it.
+				trails.Draw(*renderer, lastSceneDef.viewOrigin);
+
 				bloodMarks->Draw();
 
 				if (maybePlayer) { // localplayer exists

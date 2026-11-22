@@ -24,6 +24,7 @@
 #include "Smoke.h"
 
 #include <algorithm>
+#include <vector>
 #include <cmath>
 
 #include "Client.h"
@@ -224,6 +225,43 @@ namespace spades {
 						return;
 					}
 					client.ClearSmoke(r.ReadByte());
+				} break;
+				case SmokeRegistry::kSubPath: {
+					// id r g b count then the way as its turns: the first
+					// point whole, each later one a byte of delta apiece.
+					if (r.GetNumRemainingBytes() < 1 + 3 + 1) {
+						SPLog("Dropped a Path of the wrong size");
+						return;
+					}
+					const int front = r.ReadByte();
+					const float cr = r.ReadByte() / 255.0F, cg = r.ReadByte() / 255.0F,
+					            cb = r.ReadByte() / 255.0F;
+					const int count = r.ReadByte();
+					if (count == 0) {
+						client.ClearTrailPath(static_cast<std::uint8_t>(front));
+						break;
+					}
+					if (r.GetNumRemainingBytes() < 5 + 3 * (count - 1)) {
+						SPLog("Dropped a Path truncated in the middle of its way");
+						return;
+					}
+					std::vector<Vector3> pts;
+					pts.reserve(count);
+					int x = static_cast<int16_t>(r.ReadShort());
+					int y = static_cast<int16_t>(r.ReadShort());
+					int z = r.ReadByte();
+					pts.push_back(MakeVector3(static_cast<float>(x),
+					                          static_cast<float>(y), static_cast<float>(z)));
+					for (int k = 1; k < count; ++k) {
+						x += static_cast<int8_t>(r.ReadByte());
+						y += static_cast<int8_t>(r.ReadByte());
+						z += static_cast<int8_t>(r.ReadByte());
+						pts.push_back(MakeVector3(static_cast<float>(x),
+						                          static_cast<float>(y),
+						                          static_cast<float>(z)));
+					}
+					client.SetTrailPath(static_cast<std::uint8_t>(front),
+					                     MakeVector3(cr, cg, cb), std::move(pts));
 				} break;
 				default:
 					SPLog("Ignoring an unknown Smoke sub packet %d", sub);

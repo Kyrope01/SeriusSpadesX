@@ -46,6 +46,7 @@
 #include "PieMenuView.h"
 #include "PlayerOutfit.h"
 #include "Smoke.h"
+#include "Trail.h"
 #include "VRNetProtocol.h"
 #include "VRState.h"
 #include <Core/Math.h>
@@ -218,6 +219,9 @@ namespace spades {
 			// drawn with. Empty when the server does not negotiate it.
 			PlayerOutfits playerOutfits;
 			SmokeRegistry smokes;
+			// The Smoke extension's paths (version 2): the ways in this
+			// client draws on its own, a line a front.
+			TrailLayer trails;
 
 			// player state
 			PlayerInput playerInput;
@@ -1207,6 +1211,15 @@ namespace spades {
 			 * it takes away (255: all). Only drawn; nothing else follows from it. */
 			void StartSmoke(const SmokeParams& params);
 			void ClearSmoke(int id) { smokes.Clear(id); }
+
+			/** The Smoke extension, version 2: the ways in as paths, a line a
+			 * front, drawn as crumbs on the floor by this client on its own.
+			 * The points are the server's waypoints, in world cells; the
+			 * crumbs laid along them are. Only drawn, like the smoke:
+			 * nothing else follows from them. */
+			void SetTrailPath(std::uint8_t front, const Vector3& color,
+			                  std::vector<Vector3> points);
+			void ClearTrailPath(std::uint8_t front) { trails.Forget(front); }
 
 			/** The model sets the Player Models extension has assigned. */
 			const PlayerOutfits& GetPlayerOutfits() const { return playerOutfits; }

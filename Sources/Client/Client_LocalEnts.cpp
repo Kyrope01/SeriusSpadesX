@@ -126,6 +126,10 @@ namespace spades {
 			soundFeedbackIndicators.clear();
 			localEntities.clear();
 			smokes.Clear(SmokeParams::kAnonymous);
+			// A path, unlike a smoke, does not burn out on its own: it
+			// belongs to the world that was sent it, and is owed its
+			// clear when that world is replaced.
+			trails.ForgetAll();
 			grenadeTracers.clear();
 
 			if (bloodMarks)
@@ -385,6 +389,97 @@ namespace spades {
 			// the particles down must not see through it.
 			localEntities.emplace_back(stmp::make_unique<SmokeEntity>(
 			  *this, audioDevice.GetPointerOrNull(), hiss, params, smokes.Start(params.id)));
+		}
+
+		namespace {
+			// The floor a crumb of a way in runs over: the nearest solid
+			// top about the height the line itself was drawn at, so the
+			// crumbs sit on the ground the waypoints cross rather than on
+			// the straight slope drawn between them - the waypoints are
+			// the turns, and the ground between turns wanders. Nothing
+			// solid near, and the line's own height stands.
+			int TrailFloor(const GameMap& map, int x, int y, int z) {
+				static const int kSweep[7] = {0, -1, 1, -2, 2, -3, 3};
+				for (int k = 0; k < 7; k++) {
+					const int b = z + kSweep[k];
+					if (b >= 0 && b < map.Depth() &&
+					    map.IsSolidWrapped(x, y, b) && !map.IsSolidWrapped(x, y, b - 1))
+						return b;
+				}
+				return z;
+			}
+		} // namespace
+
+		void Client::SetTrailPath(std::uint8_t front, const Vector3& color,
+		                          std::vector<Vector3> points) {
+			SPADES_MARK_FUNCTION();
+			if (!world)
+				return; // before the map: the server sends it again once it is in
+			const Handle<GameMap>& map = world->GetMap();
+			SPAssert(map);
+			if (!map)
+				return;
+
+			// A way somewhere else than the world says nothing here:
+			// dropped whole rather than drawn folded back onto the map.
+			for (const Vector3& p : points) {
+				if (p.x < 0.0F || p.y < 0.0F || p.z < 0.0F ||
+				    p.x >= static_cast<float>(map->Width()) ||
+				    p.y >= static_cast<float>(map->Height()) ||
+				    p.z >= static_cast<float>(map->Depth()))
+					return;
+			}
+
+			// The waypoints opened into crumbs, a block of way between
+			// them: the crumb a defender reads the line by is the dot at
+			// the eye's own spacing, and the way is never a gap if a
+			// client's setting did not thin it. The two ends of the way
+			// are crumbs whatever the length falls on: the walk's own
+			// front and the core's doorstep both stand marked even on a
+			// short line that rounds to no crumb between them.
+			std::vector<Vector3> crumbs;
+			crumbs.reserve(points.size() * 2 + 2);
+			auto add = [&](const Vector3& c) {
+				const int x = static_cast<int>(c.x);
+				const int y = static_cast<int>(c.y);
+				const int z = TrailFloor(*map, x, y, static_cast<int>(c.z + 0.5F));
+				// A half-block into the cell, a little above the floor:
+				// the crumb stands on the way it marks, half in it, not
+				// buried in the ground it runs over.
+				crumbs.push_back(
+				  MakeVector3(c.x + 0.5F, c.y + 0.5F, static_cast<float>(z) - 0.35F));
+			};
+			if (!points.empty()) {
+				add(points.front());
+				if (points.size() > 1) {
+					// Where the next crumb falls, in blocks of the way
+					// walked since the last one.
+					float toNext = 1.0F;
+					for (size_t s = 0; s + 1 < points.size(); s++) {
+						const Vector3& a = points[s];
+						const Vector3& b = points[s + 1];
+						const float seg = (b - a).GetLength();
+						float walked = 0.0F;
+						while (walked + toNext <= seg) {
+							walked += toNext;
+							toNext = 1.0F;
+							add(a + (b - a) * (walked / seg));
+						}
+						toNext -= seg - walked;
+						// A float's own dust, after a hundred turns of the
+						// way: a step that lands a hair before the last
+						// crumb would draw its crumb before the walk's
+						// own line, back along the way it came.
+						if (toNext < 0.0F)
+							toNext = 0.0F;
+					}
+					add(points.back());
+				}
+			}
+			if (crumbs.empty())
+				trails.Forget(front);
+			else
+				trails.SetPath(front, color, std::move(crumbs));
 		}
 
 		void Client::KickCamera(float strength) {

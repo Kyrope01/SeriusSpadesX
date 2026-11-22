@@ -258,6 +258,9 @@ void write_team_outfit(ByteWriter& bw, uint8_t team, uint8_t outfit);
 //   0  Smoke        S->C  id(1) style(1) x y z(4 each) radius(1) r g b
 //                           opacity(1 each) duration(2) fade(1) flags(1)
 //   1  Clear Smoke  S->C  id(1)   255: every smoke
+//   2  Path         S->C  id(1) r g b(1 each) count(1) then count points:
+//                     the first x/y/z as x(2) y(2) z(1), each later one as
+//                     dx dy dz(1 each, a byte of delta)
 //
 // A smoke the server puts in the world, in a colour, for a time: a wide
 // cloud on the ground, a thin rising column, or a heavy vapour that pools
@@ -273,7 +276,7 @@ void write_team_outfit(ByteWriter& bw, uint8_t team, uint8_t outfit);
 // bit 0 carries the hiss - a trail carries none, or the way in is a
 // racket rather than a marker. Only ever sent to a connection
 // that claimed the extension.
-enum class SmokeSub : uint8_t { Smoke = 0, Clear = 1 };
+enum class SmokeSub : uint8_t { Smoke = 0, Clear = 1, Path = 2 };
 enum class SmokeStyle : uint8_t { Cloud = 0, Column = 1, Ground = 2 };
 // The whole packet, id included: one smoke started.
 void write_smoke(ByteWriter& bw, uint8_t id, SmokeStyle style, const struct Vec3& origin,
@@ -281,5 +284,22 @@ void write_smoke(ByteWriter& bw, uint8_t id, SmokeStyle style, const struct Vec3
                  uint16_t duration_tenths, uint8_t fade_tenths, uint8_t flags);
 // The whole packet, id included: 255 clears every smoke at once.
 void write_smoke_clear(ByteWriter& bw, uint8_t id);
+
+// One waypoint of a Path: a cell of the map and the surface the line runs
+// on it at. The first of a path is sent as its own x and y, each later one
+// as a byte of difference from the point before it, so a path is a handful
+// of bytes however long the way it traces - the points are the turns, not
+// every tread.
+struct PathPoint {
+    int16_t x = 0, y = 0;
+    uint8_t z = 0;
+};
+// The whole packet, id included: one path replaced. A caller keeps every
+// delta within a byte (-128..127, which it does by cutting a long
+// straight run into spans) and the point count within 255, or the path is
+// sent clipped - the line still runs to wherever its count ran out.
+// Empty points: the id's path taken away.
+void write_path(ByteWriter& bw, uint8_t id, uint8_t r, uint8_t g, uint8_t b,
+                const std::vector<PathPoint>& points);
 
 } // namespace proto

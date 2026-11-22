@@ -121,7 +121,9 @@ namespace spades {
 			  {ExtensionTypePieMenu, 1},
 			  {ExtensionTypePlayerOutfit, 1},
 			  {ExtensionTypeCompactWorldUpdate, 1},
-			  {ExtensionTypeSmoke, 1},
+			  // Version 2 adds the Path sub packet: a way in drawn by this
+			  // client itself as a line, cheaper and longer than its beds.
+			  {ExtensionTypeSmoke, 2},
 			  {ExtensionTypePlayerLimit, 1},
 			  {ExtensionTypeMessageTypes, 1},
 			  {ExtensionTypeKickReason, 1}};

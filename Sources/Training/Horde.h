@@ -38,6 +38,7 @@
 // be read out cell by cell - trace_route, each cell with the surface it was
 // walked on - which the host paints at the walk's own height, never on the
 // treetops above it, so the way in can be watched while it proves itself.
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -56,9 +57,15 @@ enum class Phase {
 struct Config {
     // The cell the zombies walk to.
     int core_x = 256, core_y = 256;
-    // The corners zombies come from: the centre of each corner's reach.
-    int spawn_x[4] = {32, 479, 32, 479};
-    int spawn_y[4] = {32, 32, 479, 479};
+    // The spawn points the dead come from: the centre of each one's reach.
+    // Ten of them now - the map's four corners, and six more spread along
+    // its edges - so the later waves can open more fronts than the corners
+    // alone. A wave takes as many of them, of the ranked order, as its
+    // own number says; a point whose reach the walk never touches raises
+    // nothing, whatever its number.
+    static constexpr int kSpawnSites = 10;
+    int spawn_x[kSpawnSites] = {32, 479, 32, 479, 181, 330, 181, 330, 32, 479};
+    int spawn_y[kSpawnSites] = {32, 32, 479, 479, 32, 32, 479, 479, 255, 255};
     // The spawn box width of earlier days; the clearing is five by five now.
     int spawn_size = 12;
     double prep_seconds = 20.0;
@@ -67,17 +74,43 @@ struct Config {
     // around being born is a wave that looks stalled: quicker than it
     // once kept, so the horde reads as one body rising and walking.
     double spawn_interval = 0.25;
-    int wave_count_max = 8;
+    // The rounds keep coming while the ramp still has something new to
+    // show: eight waves never reached the ninth point, so twenty is the
+    // count now - the points all open by ten, and the packs grow on.
+    int wave_count_max = 20;
     int core_hp = 150;
     // How much of the core's health a cleared wave mends back.
     int core_mend = 25;
     // How long after an edit the field is recomputed.
     double field_period = 0.5;
-    // How big a wave is: base + growth * (wave - 1), capped.
-    int wave_zombies(int wave) const;
-    static constexpr int kWaveBase = 12;
-    static constexpr int kWaveGrowth = 8;
-    static constexpr int kWaveMaxZombies = 100;
+    // How big a wave is: the waves open fronts as they number. A wave
+    // takes one spawn point more than the one before it, as many of the
+    // ranked order as the terrain holds, until the points reach their
+    // cap - and past the cap it is the pack at each point that grows,
+    // a few more to a point, for the ways in are as many as they ever
+    // were and only the crowds on them deepen. The knobs are the
+    // balance phase's to turn: the cap, the pack's base, its growth.
+    // The whole of it is capped at kWaveMaxZombies, the world's own
+    // budget of the dead - what the slots cannot stand is skipped at
+    // the raising, one at a time, and never a wave that waits on it.
+    int spawn_point_cap = kSpawnSites;
+    static constexpr int kPackBase = 20;
+    static constexpr int kPackGrowth = 5;
+    static constexpr int kWaveMaxZombies = 250;
+    int wave_points(int wave) const {
+        const int cap = spawn_point_cap < 1
+            ? 1 : (spawn_point_cap > kSpawnSites ? kSpawnSites : spawn_point_cap);
+        const int w = (std::max)(1, wave);
+        return w < cap ? w : cap;
+    }
+    int wave_pack(int wave) const {
+        const int w = (std::max)(1, wave);
+        const int cap = wave_points(wave);
+        return kPackBase + kPackGrowth * (w > cap ? w - cap : 0);
+    }
+    int wave_zombies(int wave) const {
+        return (std::min)(kWaveMaxZombies, wave_points(wave) * wave_pack(wave));
+    }
     // How the dead cross: the walk is reversible - a step of at most
     // kWalkClimb, up or down, and anything more is a wall. The dead still
     // take no falling damage, but the route never feeds them into a drop
@@ -103,14 +136,11 @@ struct Config {
     // it is worth kLevelShy steps a block. On level ground the price is
     // nothing: a step a cell, as ever.
     static constexpr int kLevelShy = 8;
-    // How many corners a wave comes from: one while the route is watched,
-    // more when the walk has proved itself. The walk ranks the four corners
-    // by the way it reads into each and the wave takes the first few of
-    // that order - anything else is a coin toss the terrain wins.
-    int spawn_corners = 1;
-    int active_corners() const {
-        return spawn_corners < 1 ? 1 : (spawn_corners > 4 ? 4 : spawn_corners);
-    }
+    // How many spawn points a wave comes from is the wave's own number,
+    // read at wave_points: one while the route is watched, more as the
+    // walk proves itself. The points are ranked by the way the walk
+    // reads into each and the wave takes the first few of that order -
+    // anything else is a coin toss the terrain wins.
     // How far out from its asked-for centre a corner's spawn point may be
     // sought, in rings: the anchor of a wave is the FAR END of the walk
     // inside that reach - the frontier, wherever the borderlands stop the
@@ -166,7 +196,7 @@ public:
     // only offers a dead end, that reads as the rank's corner too - the
     // walk takes whatever way the map leaves it.
     int ranked_corner(int rank) const {
-        if (rank < 0 || rank > 3) return 0;
+        if (rank < 0 || rank > Config::kSpawnSites - 1) return 0;
         return rank_corner_[rank];
     }
     // The settings this runs with, for the host's announcements.
@@ -178,6 +208,11 @@ public:
     void on_zombie_killed();
     // The core took a hit. Its health floors at zero and Defeat follows.
     void on_core_damaged(int amount);
+    // A wave wiped by the host's own hand: nothing owed, nothing walking,
+    // the core mended whole - and a Defeat called off with it, the
+    // waiting back, so the next wave comes when the clock has it.
+    // Victory is held: the rounds the settings name are the rounds kept.
+    void clear_wave(double now);
     // Everything from the beginning: Prep again, the field as it stands.
     void restart(double now);
 
@@ -296,13 +331,13 @@ private:
     // was last recomputed: false once the field moved, scouted again by
     // the next tick's waiting phase or the next wave's placing.
     bool scouted_ = false;
-    // Where the wave last walked in from, one anchor a corner (-1 for none):
-    // the route the host paints is traced from here.
-    int anchor_x_[4] = {-1, -1, -1, -1};
-    int anchor_y_[4] = {0};
-    // The corners in the order the last wave walked them (rank 0 first),
-    // and how many zombies that wave truly stood up.
-    int rank_corner_[4] = {0, 1, 2, 3};
+    // Where the wave last walked in from, one anchor a spawn point (-1
+    // for none): the route the host paints is traced from here.
+    int anchor_x_[Config::kSpawnSites] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+    int anchor_y_[Config::kSpawnSites] = {0};
+    // The spawn points in the order the last wave walked them (rank 0
+    // first), and how many zombies that wave truly stood up.
+    int rank_corner_[Config::kSpawnSites] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
     int placed_ = 0;
 };
 

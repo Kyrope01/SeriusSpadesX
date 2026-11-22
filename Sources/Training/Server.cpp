@@ -612,13 +612,13 @@ struct Server::Impl {
     horde::Phase horde_told = horde::Phase::Prep;
     int horde_wave_told = 0;
     double core_alarm_at = 0.0;   // "under attack": one line every few seconds
-    // The packs: one per corner, a single path each - the last joined zombie
-    // of a corner is the one the next of its pack follows.
-    int pack_tail[4] = {-1, -1, -1, -1};
-    // When each corner's spawn ping next goes out, while that corner still
+    // The packs: one per spawn point, a single path each - the last joined
+    // zombie of a point is the one the next of its pack follows.
+    int pack_tail[horde::Config::kSpawnSites] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+    // When each spawn point's ping next goes out, while that point still
     // streams its wave: one marker every few seconds survives a client's
     // map load, which a single early ping never did.
-    double corner_ping_next[4] = {0.0, 0.0, 0.0, 0.0};
+    double corner_ping_next[horde::Config::kSpawnSites] = {};
     // When the way in's vapour is next laid again: the trail is said in
     // beds of ground vapour, one a blink, and the world is built on
     // while the dead walk it - so the reading is traced over and over
@@ -1183,7 +1183,7 @@ struct Server::Impl {
         p->born_at = world_time;
         // Single file behind its corner's pack: a zombie with nobody to
         // follow is the pack's leader, and reads the field itself.
-        const int corner = at.corner & 3;
+        const int corner = at.corner;
         const Player* tail =
             pack_tail[corner] >= 0 ? players[static_cast<size_t>(pack_tail[corner])].get() : nullptr;
         p->ahead_id = (tail && tail->zombie && tail->alive) ? tail->id : -1;
@@ -1704,6 +1704,30 @@ struct Server::Impl {
         }
     }
 
+    // The test bench's broom: every walker of the standing wave put down,
+    // the core mended whole, and a defeat called off with it - the world
+    // returns to its waiting, and the next wave comes when the wait is
+    // over. The walkers fall where they stand, their slots go back, and
+    // the wave the clock had coming is owed nobody: the counting starts
+    // again at the next one.
+    void clear_wave() {
+        const bool defeated = horde->phase() == horde::Phase::Defeat;
+        int down = 0;
+        for (auto& qq : players)
+            if (qq && qq->zombie && qq->alive) {
+                kill(*qq, nullptr, kFallKill);
+                ++down;
+            }
+        horde->clear_wave(world_time);
+        if (horde_mode() && !cfg.map_file.empty()) build_core_column();
+        char text[96];
+        std::snprintf(text, sizeof text, "%d down; the core mends to %d",
+                      down, horde->core_hp());
+        system_chat(text);
+        if (defeated)
+            system_chat("The defeat is called off; the next wave is coming.");
+    }
+
     // The wave's announcements, its spawns, and its dead slots given back.
     void horde_tick() {
         horde->tick(world_time);
@@ -1716,7 +1740,7 @@ struct Server::Impl {
                         horde_wave_told = horde->wave();
                         // New packs, their pings due right away, and the
                         // way in's vapour laid before the first tread is walked.
-                        for (int k = 0; k < 4; ++k) {
+                        for (int k = 0; k < horde::Config::kSpawnSites; ++k) {
                             pack_tail[k] = -1;
                             corner_ping_next[k] = 0.0;
                         }
@@ -1771,9 +1795,9 @@ struct Server::Impl {
         std::vector<horde::SpawnAt> due;
         while (horde->take_due(due, world_time)) {
             for (const horde::SpawnAt& s : due) {
-                // While the corner streams, its spawn is pinged again every
+                // While the point streams, its spawn is pinged again every
                 // so often: the marker survives a client's map load.
-                const int c = s.corner & 3;
+                const int c = s.corner;
                 if (world_time >= corner_ping_next[c]) {
                     corner_ping_next[c] = world_time + 30.0;
                     ping_wave_spawn(s);
@@ -2529,7 +2553,10 @@ struct Server::Impl {
             else if (text == "/restart" && aim_mode()) {
                 reset_run();
                 if (p.alive) spawn(p);
-            } else system_chat(aim_mode() ? "Commands here: /restart, /kill" : "Commands here: /kill", p.id);
+            } else if (text == "/clearwave" && horde_mode()) clear_wave();
+            else if (horde_mode()) system_chat("Commands here: /clearwave, /kill", p.id);
+            else system_chat(aim_mode() ? "Commands here: /restart, /kill"
+                                        : "Commands here: /kill", p.id);
             return;
         }
         const bool all = type == static_cast<int>(proto::ChatType::All);
@@ -2691,7 +2718,7 @@ bool Server::start(std::string& err) {
         s.horde_cfg.core_x = s.cfg.core_x;
         s.horde_cfg.core_y = s.cfg.core_y;
         s.nearest_land(s.horde_cfg.core_x, s.horde_cfg.core_y);
-        for (int k = 0; k < 4; ++k) {
+        for (int k = 0; k < horde::Config::kSpawnSites; ++k) {
             int x = s.horde_cfg.spawn_x[k], y = s.horde_cfg.spawn_y[k];
             s.nearest_land(x, y);
             s.horde_cfg.spawn_x[k] = x;

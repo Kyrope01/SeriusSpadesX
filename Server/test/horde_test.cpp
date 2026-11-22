@@ -82,6 +82,13 @@ horde::Config horde_cfg(int cx, int cy) {
     cfg.spawn_x[1] = 479; cfg.spawn_y[1] = 32;
     cfg.spawn_x[2] = 32; cfg.spawn_y[2] = 479;
     cfg.spawn_x[3] = 479; cfg.spawn_y[3] = 479;
+    // The six newer spawn points the Config carries are sent beyond any
+    // ring the search can walk out: these rounds stay the four corners'
+    // own, as they always were.
+    for (int k = 4; k < horde::Config::kSpawnSites; ++k) {
+        cfg.spawn_x[k] = 712;
+        cfg.spawn_y[k] = 712;
+    }
     cfg.spawn_size = 12;
     cfg.prep_seconds = 10.0;
     cfg.intermission_seconds = 5.0;
@@ -224,29 +231,29 @@ void test_waves() {
     check(h.take_due(due, 10.7), "the wave has zombies waiting");
     check(due.size() == 1 && h.zombies_up() == 1, "the first is due and counted");
     h.take_due(due, 100.0);
-    check(h.zombies_up() == 12, "wave one is twelve zombies (base)");
+    check(h.zombies_up() == 20, "wave one is one pack of twenty");
     bool on_ground = true;
     bool one_corner = true;
     for (const horde::SpawnAt& s : due) {
-        if (s.z != GROUND_TOP) on_ground = false;  // due holds the last eleven
+        if (s.z != GROUND_TOP) on_ground = false;  // due holds the last nineteen
         if (s.corner != h.ranked_corner(0)) one_corner = false;
     }
     check(on_ground, "spawn cells stand on the ground they were picked for");
     check(one_corner && h.ranked_corner(0) == 3,
-          "one corner open: every zombie walks out of the corner the walk ranks first");
-    check(!h.wave_cleared(), "twelve walking is not a cleared wave");
+          "one point open: every zombie walks out of the point the walk ranks first");
+    check(!h.wave_cleared(), "twenty walking is not a cleared wave");
     h.on_core_damaged(50);
     check(h.phase() == horde::Phase::Wave && h.core_hp() == 100, "the core takes a hit");
-    for (int i = 0; i < 12; ++i) h.on_zombie_killed();
-    check(h.wave_cleared(), "all twelve down clears the wave");
+    for (int i = 0; i < 20; ++i) h.on_zombie_killed();
+    check(h.wave_cleared(), "all twenty down clears the wave");
     h.tick(100.5);
     check(h.phase() == horde::Phase::Intermission, "a cleared wave turns to Intermission");
     check(h.core_hp() == 125, "the core mends by 25 between waves");
     h.tick(106.0);
     check(h.phase() == horde::Phase::Wave && h.wave() == 2, "intermission over: wave two");
     h.take_due(due, 200.0);
-    check(h.zombies_up() == 20, "wave two is twenty zombies (base + growth)");
-    for (int i = 0; i < 20; ++i) h.on_zombie_killed();
+    check(h.zombies_up() == 40, "wave two is two packs of twenty");
+    for (int i = 0; i < 40; ++i) h.on_zombie_killed();
     h.tick(200.5);
     check(h.phase() == horde::Phase::Victory, "the last wave cleared is Victory");
     h.restart(1000.0);
@@ -255,15 +262,22 @@ void test_waves() {
     check(h.phase() == horde::Phase::Wave, "the rounds go on after a restart");
     h.on_core_damaged(999);
     check(h.phase() == horde::Phase::Defeat && h.core_hp() == 0, "the core gone is Defeat");
+    h.clear_wave(2000.0);
+    check(h.phase() == horde::Phase::Intermission && h.core_hp() == 150,
+          "a wiped wave mends the core whole and calls the defeat off");
+    h.tick(2006.0);
+    check(h.phase() == horde::Phase::Wave && h.wave() == 2,
+          "the rounds go on after the call-off");
 }
 
 void test_growth() {
     std::printf("[growth] the wave size curve\n");
     horde::Config cfg;
-    check(cfg.wave_zombies(1) == 12, "wave one: base");
-    check(cfg.wave_zombies(2) == 20, "wave two: base + growth");
-    check(cfg.wave_zombies(3) == 28, "wave three: base + 2 growth");
-    check(cfg.wave_zombies(20) == 100, "far out: capped");
+    check(cfg.wave_zombies(1) == 20, "wave one: one pack of twenty");
+    check(cfg.wave_zombies(2) == 40, "wave two: a second point, a second pack");
+    check(cfg.wave_zombies(10) == 200, "wave ten: every point, a pack apiece");
+    check(cfg.wave_zombies(11) == 250, "wave eleven: the packs deepen to twenty-five");
+    check(cfg.wave_zombies(30) == 250, "far out: capped at the world's budget");
 }
 
 void test_route() {
@@ -365,7 +379,7 @@ void test_route() {
                 if (c.z != GROUND_TOP) on_floor = false;
             }
         check(through && on_floor, "the wave enters by the tunnel, walking its floor");
-        check(h.placed() == 12, "the wave stands up outside the walls");
+        check(h.placed() == 20, "the wave stands up outside the walls");
     }
     // Two walls the walk cannot cross: a cell shut off the field traces
     // nothing, and a core sealed away still anchors its corner - wherever
@@ -418,13 +432,13 @@ void test_route() {
         check(!h.corner_anchor(0, ax, ay), "a corner the field never reaches holds no anchor");
         check(h.ranked_corner(0) == 3,
               "a sealed corner is passed over for one the walk reaches");
-        check(h.placed() == 12, "the wave stands up elsewhere");
+        check(h.placed() == 20, "the wave stands up elsewhere");
         std::vector<horde::SpawnAt> due;
         check(h.take_due(due, 100.0), "the wave still streams");
         bool from_rank_three = true;
         for (const horde::SpawnAt& s : due)
             if (s.corner != 3) from_rank_three = false;
-        check(from_rank_three && h.zombies_up() == 12,
+        check(from_rank_three && h.zombies_up() == 20,
               "the whole wave walks in from the corner the walk found");
         check(!h.wave_cleared(), "a wave that found its way in is not cleared");
     }

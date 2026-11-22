@@ -36,11 +36,6 @@ size_t cell_index(int x, int y) {
 
 }  // namespace
 
-int Config::wave_zombies(int wave) const {
-    const int n = kWaveBase + kWaveGrowth * ((std::max)(1, wave) - 1);
-    return (std::min)(kWaveMaxZombies, n);
-}
-
 // Starts in Prep with the countdown unarmed (zero, so the first tick would
 // begin wave one); the host calls restart(now) to arm it. The field is
 // computed right away - it is asked for before the first tick.
@@ -299,7 +294,7 @@ bool Horde::reach_spawn(const std::vector<int32_t>& dist) const {
             if (d[k] != kUnreachable) return true;
         return false;
     };
-    for (int c = 0; c < 4; ++c) {
+    for (int c = 0; c < Config::kSpawnSites; ++c) {
         const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
         for (int r = 0; r < Config::kSpawnSearch; ++r) {
             for (int y = cy - r; y <= cy + r; ++y) {
@@ -639,8 +634,8 @@ void Horde::scout() {
             if (d[k] >= 0) return true;
         return false;
     };
-    // The anchors, all four corners: the far end of the walk, the frontier.
-    // The scan sweeps the rings around each corner's asked-for centre out
+    // The anchors, every spawn point: the far end of the walk, the frontier.
+    // The scan sweeps the rings around each point's asked-for centre out
     // to kSpawnSearch and keeps the cell the field reaches LAST, the walk's
     // longest way in, wherever the terrain stops the legs. A ring can
     // stand at many heights - a skirt of cliff over the plain, a canopy
@@ -656,7 +651,7 @@ void Horde::scout() {
         rungs_y.push_back(y);
         rungs_g.push_back(ground(x, y));
     };
-    for (int c = 0; c < 4; ++c) {
+    for (int c = 0; c < Config::kSpawnSites; ++c) {
         anchor_x_[c] = -1;
         anchor_y_[c] = 0;
         const int cx = cfg_.spawn_x[c], cy = cfg_.spawn_y[c];
@@ -706,8 +701,8 @@ void Horde::scout() {
         bool anchored;
     };
     std::vector<RouteCell> trace;
-    Ranked ways[4];
-    for (int c = 0; c < 4; ++c) {
+    Ranked ways[Config::kSpawnSites];
+    for (int c = 0; c < Config::kSpawnSites; ++c) {
         ways[c].corner = c;
         ways[c].anchored = anchor_x_[c] >= 0;
         ways[c].end = ways[c].dist = 0;
@@ -719,7 +714,7 @@ void Horde::scout() {
                               : distance(trace.back().x, trace.back().y);
         }
     }
-    std::sort(ways, ways + 4, [](const Ranked& a, const Ranked& b) {
+    std::sort(ways, ways + Config::kSpawnSites, [](const Ranked& a, const Ranked& b) {
         if (a.anchored != b.anchored) return a.anchored;
         if (!a.anchored) return a.corner < b.corner;
         // A way in that arrives beats one that dies against a cliff.
@@ -733,7 +728,7 @@ void Horde::scout() {
         if (a.end != b.end) return a.end < b.end;
         return a.corner < b.corner;  // the map reads NE, NW, SE, SW last
     });
-    for (int c = 0; c < 4; ++c) rank_corner_[c] = ways[c].corner;
+    for (int c = 0; c < Config::kSpawnSites; ++c) rank_corner_[c] = ways[c].corner;
     scouted_ = true;
 }
 
@@ -745,7 +740,7 @@ void Horde::scout() {
 void Horde::place_wave(double now) {
     if (!scouted_) scout();   // the reading only moves with the field
     const int n = cfg_.wave_zombies(wave_);
-    const int nc = cfg_.active_corners();
+    const int nc = cfg_.wave_points(wave_);
     // The anchored ways sort to the front, so the active ranks are the
     // first few of them, however many the corners could raise.
     int ranks = 0;
@@ -763,7 +758,7 @@ void Horde::place_wave(double now) {
         int x = 0, y = 0, z = 0;
         std::vector<int> mx, my, mz;
     };
-    Site sites[4];
+    Site sites[Config::kSpawnSites];
     static constexpr int kRoomTol = 2;  // a floor may sit this far off its cell's road height
     const auto ground_of = [&](int x, int y) {
         const int bk = best_state(x, y);
@@ -893,6 +888,16 @@ void Horde::on_core_damaged(int amount) {
     if (core_hp_ == 0) {
         phase_ = Phase::Defeat;
         pending_.clear();
+    }
+}
+
+void Horde::clear_wave(double now) {
+    pending_.clear();
+    up_ = 0;
+    core_hp_ = cfg_.core_hp;
+    if (phase_ == Phase::Defeat) {
+        phase_ = Phase::Intermission;
+        phase_until_ = now + cfg_.intermission_seconds;
     }
 }
 

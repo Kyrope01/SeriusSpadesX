@@ -88,11 +88,14 @@ constexpr int kZombieYoyoWindows = 6;
 // the beds re-said, an obstacle answered within the beat - the trail
 // follows the ground, and the ground is moved on while the walk is on.
 constexpr double kRouteBlink = 0.8;
-// The swing of its colour: one held this long, then the other, read off
-// the clock so every send agrees with the last. Slower than it first
-// swung: a trail that changes its mind at half this pace reads
-// steadier, heavier - a lantern, not a strobe.
-constexpr double kRouteColour = 1.6;
+// A colour a spawn point: one fixed colour held solid along its whole
+// way in - the trail of it and its ping alike - so a wave of many
+// fronts is read as many ways in, each named by its own colour; the
+// living's own smoke never comes in any of them. Orange, rose, blue,
+// yellow, red, green, cyan, purple, lime, teal, one a corner.
+constexpr uint32_t kFrontColour[horde::Config::kSpawnSites] = {
+    0xFF8000, 0xFF38B8, 0x3098FF, 0xFFE530, 0xFF2828,
+    0x40FF40, 0x00F0E8, 0xB050FF, 0xC8FF40, 0x20D0A0};
 
 // The catch of the pack: a follower runs once its leader stands more than
 // this far ahead. Every heel of the line walks at the same pace as the one
@@ -425,6 +428,10 @@ struct Player {
     // its windows apart - a digger stands by design, and the hop and the
     // fling would only spoil its work.
     double spade_at = -1e9;
+    // The spawn point it walked in on: the corner its pack belongs to, so
+    // a front's trail says itself from its own pack's head, in its own
+    // colour. A person's is nobody's.
+    int spawn_corner = -1;
     // Its heel prints: the places its feet were set, half a pace apart,
     // kept in a ring in the order they were walked - the pack's memory
     // of the way it holds. The line does not follow the body in front;
@@ -1189,6 +1196,7 @@ struct Server::Impl {
         // Single file behind its corner's pack: a zombie with nobody to
         // follow is the pack's leader, and reads the field itself.
         const int corner = at.corner;
+        p->spawn_corner = corner;
         const Player* tail =
             pack_tail[corner] >= 0 ? players[static_cast<size_t>(pack_tail[corner])].get() : nullptr;
         p->ahead_id = (tail && tail->zombie && tail->alive) ? tail->id : -1;
@@ -1286,7 +1294,8 @@ struct Server::Impl {
     // dead fear no landing), or a climb beyond the jump: and a climb is
     // the spade's own work. The walker plants itself facing the column
     // it cannot take and empties the crossing's top off it, one voxel a
-    // dig_seconds - the pace the walk's own price of it says - until what
+    // dig_seconds - the living digger's own pace, three blocks the
+    // second - until what
     // is left is a jump the hop and the fling can clear, and the field,
     // freshly recomputed around the lowered wall, hands the whole pack
     // the way over. Only the pack's head digs: one spade a crossing, one
@@ -1681,17 +1690,23 @@ struct Server::Impl {
     // Where a wave comes from, while it comes: the same ping the tutorial's
     // goals use, re-sent for a corner every few seconds it still streams -
     // one marker at the pack's spawn, held long enough to be walked to,
-    // renewed so a client mid-load still sees it once it lands.
+    // renewed so a client mid-load still sees it once it lands. A client
+    // keeps a ping a player-id, so a front's ping goes out under an id of
+    // its own - the ten fronts' ids, the corners counted off the tenth
+    // player-slot - or a second front's marker would wipe the first's
+    // off the map. The ping wears its front's own colour, the one its
+    // trail sleeps on too: the marker names the front that its vapour
+    // pours out of.
     void ping_wave_spawn(const horde::SpawnAt& s) {
         ByteWriter bw;
         bw.write_u8(static_cast<uint8_t>(PacketId::Teamplay));
         bw.write_u8(1);
-        bw.write_u8(255);
+        bw.write_u8(static_cast<uint8_t>(245 + s.corner));   // this front's own ping id
         bw.write_vec(Vec3{static_cast<float>(s.x) + 0.5f, static_cast<float>(s.y) + 0.5f,
                           static_cast<float>(s.z) - 1.0f});
         bw.write_f32(20.0f);
         bw.write_u8(1 | 2);
-        write_color(bw, 0x50FF50);
+        write_color(bw, kFrontColour[s.corner]);
         bw.write_u8(0);
         const char* text = "The wave comes from here";
         for (const char* c = text; *c; ++c) bw.write_u8(static_cast<uint8_t>(*c));
@@ -1699,99 +1714,131 @@ struct Server::Impl {
             if (o && o->peer && !o->loading && o->ext_teamplay && o->playing()) send(*o, bw);
     }
 
-    // The way in, once over: the reading the vapour stands on - the
-    // traced route of the wave's ranked-first corner, from its anchor to
-    // the core's doorstep, or nothing when no corner anchors. While the
-    // wave walks, the reading begins instead at the feet of the walk's
-    // own head - the leader that has come nearest the core, on the
-    // ground it stands on: with every beat the trail is re-said from
-    // where the walk has got to, the part behind said no more, and the
-    // vapour the leader has already crossed thins out on its own - the
-    // trail looks less like a plan drawn ahead of time and more like a
-    // thing pouring out of the walker's own feet, live.
-    bool route_reading(std::vector<horde::RouteCell>& cells) {
-        cells.clear();
+    // The ways in, one a front: the reading the vapour stands on - the
+    // traced route of every front the coming wave walks on, each such
+    // reading from its front's own place. While the wave walks, a
+    // front's reading begins at the feet of that front's own pack head -
+    // its leader that has come nearest the core, on the ground it
+    // stands on: with every beat the trail is re-said from where the
+    // pack has got to, the part behind said no more, and the vapour the
+    // leader has already crossed thins out on its own - the trail looks
+    // less like a plan drawn ahead of time and more like a thing
+    // pouring out of the walker's own feet, live. A front whose pack
+    // has not raised a walker yet - or has none left standing - is read
+    // from its anchor instead, so the way in is said whole while it
+    // waits; and whichever end it is read from, the sealed way in goes
+    // to the spade's own reading, painted the same, that the defenders
+    // see where the fences will be gnawed. Nothing when no front
+    // anchors.
+    struct FrontRead {
+        int corner;                            // the site this way comes in from: its colour
+        std::vector<horde::RouteCell> cells;    // the way itself, from the walking end to the doorstep
+    };
+    bool route_reading(std::vector<FrontRead>& fronts) {
+        fronts.clear();
         if (!horde) return false;
-        if (horde->phase() == horde::Phase::Wave) {
-            const Player* head = nullptr;
-            int head_fd = -1;
-            for (auto& q : players) {
-                if (!q || !q->zombie || !q->alive || q->ahead_id >= 0) continue;
-                if (q->body.airborne) continue;    // no print is set in the air
-                const int qx = static_cast<int>(std::floor(q->body.pos.x));
-                const int qy = static_cast<int>(std::floor(q->body.pos.y));
-                const int qz = static_cast<int>(std::floor(q->body.pos.z + 2.25f));
-                const int fd = horde->distance(qx, qy, qz);
-                if (fd < 0 || (head != nullptr && fd >= head_fd)) continue;
-                head = q.get();
-                head_fd = fd;
+        // The wave whose ways in are watched: the one walking now, or the
+        // next one when the world waits for it.
+        const bool walking = horde->phase() == horde::Phase::Wave;
+        const int wave = walking ? horde->wave() : horde->wave() + 1;
+        const int nf = horde->wave_fronts(wave);
+        for (int r = 0; r < nf; ++r) {
+            const int corner = horde->ranked_corner(r);
+            FrontRead fr;
+            fr.corner = corner;
+            int sx = 0, sy = 0;
+            bool have_start = false;
+            if (walking) {
+                // This pack's own head: the nearest to the core of the
+                // leaders its corner raised, on the ground it stands on.
+                const Player* head = nullptr;
+                int head_fd = -1;
+                for (auto& q : players) {
+                    if (!q || !q->zombie || !q->alive || q->ahead_id >= 0) continue;
+                    if (q->spawn_corner != corner) continue;
+                    if (q->body.airborne) continue;    // no print is set in the air
+                    const int qx = static_cast<int>(std::floor(q->body.pos.x));
+                    const int qy = static_cast<int>(std::floor(q->body.pos.y));
+                    const int qz = static_cast<int>(std::floor(q->body.pos.z + 2.25f));
+                    const int fd = horde->distance(qx, qy, qz);
+                    if (fd < 0 || (head != nullptr && fd >= head_fd)) continue;
+                    head = q.get();
+                    head_fd = fd;
+                }
+                if (head != nullptr) {
+                    sx = static_cast<int>(std::floor(head->body.pos.x));
+                    sy = static_cast<int>(std::floor(head->body.pos.y));
+                    have_start = true;
+                }
             }
-            if (head != nullptr) {
-                if (horde->trace_route(static_cast<int>(std::floor(head->body.pos.x)),
-                                       static_cast<int>(std::floor(head->body.pos.y)),
-                                       cells) &&
-                    !cells.empty())
-                    return true;
-                // The sealed way in: the spade's own reading, painted the
-                // same, that the defenders see where the fences will be
-                // gnawed.
-                if (horde_cfg.dig &&
-                    horde->trace_dig(static_cast<int>(std::floor(head->body.pos.x)),
-                                     static_cast<int>(std::floor(head->body.pos.y)),
-                                     cells) &&
-                    !cells.empty())
-                    return true;
-            }
+            if (!have_start && !horde->corner_anchor(corner, sx, sy)) continue;
+            if (!horde->trace_route(sx, sy, fr.cells) && horde_cfg.dig)
+                horde->trace_dig(sx, sy, fr.cells);   // the sealed way in: over the walls it will take down
+            if (fr.cells.empty()) continue;
+            fronts.push_back(std::move(fr));
         }
-        int ax = 0, ay = 0;
-        if (!horde->corner_anchor(horde->ranked_corner(0), ax, ay)) return false;
-        if (!horde->trace_route(ax, ay, cells) && horde_cfg.dig)
-            horde->trace_dig(ax, ay, cells);   // the sealed wave's way: over the walls it will take down
-        return !cells.empty();
+        return !fronts.empty();
     }
 
-    // The way in, said as heavy vapour - the only word it is said in: a
-    // continuous bed of it laid along the walk's full reading, one bed
-    // every couple of treads so the trail reads unbroken from the wave's
-    // anchor to the core's doorstep, over the dressed ground and across
+    // The ways in, said as heavy vapour - the only word they are said
+    // in: a bed of it laid along each front's reading, one bed every
+    // couple of treads so a trail reads unbroken from where it is
+    // walked to the core's doorstep, over the dressed ground and across
     // the world's bed alike - the legs walk the bedrock as freely as any
-    // ground, and no wave crosses unwarned. Each bed sits at its tread's
-    // floor, a cloud hardly a block across that pools rather than
-    // climbs, kept coming for its whole stay so the bed stays fresh;
-    // its id is its place in the trail, so a resend lays its vapour
-    // over the old in place, and a reading that no longer walks a place
-    // simply stops saying it - the vapour hung there thins out on its
-    // own, no clearing sweep to keep a stale way in on the air. The
-    // colour blinks vivid orange and neon blue, a beat to the breath:
-    // the one marker a defender cannot mistake for smoke of their own.
+    // ground, and no wave crosses unwarned. Each bed sits at its
+    // tread's floor, a cloud hardly a block across that pools rather
+    // than climbs, kept coming for its whole stay so the bed stays
+    // fresh. Every front owns a band of ids of its own - a bed's id is
+    // its place in its front's band, the bands stacked one a front so
+    // ten trails lie on the ground at once without a bed of one ever
+    // laid over a bed of another - so a resend lays its vapour over the
+    // old in place, and a reading that no longer walks a place simply
+    // stops saying it: the vapour hung there thins out on its own, no
+    // clearing sweep to keep a stale way in on the air. Within a band
+    // the ids count from the doorstep outwards, so the beds nearest the
+    // core keep their ids while a walking trail grows shorter behind
+    // its advancing head. A band holds only so many beds, and a way
+    // longer than its band says the end the defence reads - the treads
+    // by the core - the rest of it held by its ping at the site itself.
+    // A trail wears its front's own colour, held solid the whole way:
+    // the colour names the front, its ping the same; the one marker a
+    // defender cannot mistake for smoke of their own.
     // Sound it carries none: a line of hisses is a racket, not a marker.
     void smoke_route() {
-        std::vector<horde::RouteCell> cells;
-        if (!route_reading(cells)) return;
+        std::vector<FrontRead> fronts;
+        if (!route_reading(fronts)) return;
         constexpr int kStride = 2;          // a bed every couple of treads: a trail that reads unbroken
-        constexpr int kMaxBeds = 240;       // ids 1..240, clear of 255
+        constexpr int kFrontBeds = 24;      // a band a front: the ten bands' ids run 1..240, clear of 255
         constexpr uint16_t kStay = 7;       // 0.7 s it keeps coming: the heavier pour, one blink's worth and a little over
         constexpr uint8_t kThins = 2;       // 0.2 s the last of it takes to go: it leaves like it settles, slowly
-        // Whose beat it is: vivid orange on the even breaths, neon blue on
-        // the odd, read off the clock so every resend agrees with the last.
-        const bool blue =
-            static_cast<int64_t>(world_time / kRouteColour) % 2 != 0;
-        const uint8_t r = blue ? 0x00 : 0xFF, g = blue ? 0xC8 : 0x80, b = blue ? 0xFF : 0x00;
-        int bed = 0;
-        for (size_t i = 0; i < cells.size(); ++i) {
-            if (i % kStride != 0 && i + 1 != cells.size()) continue;  // the last tread is said whatever rhythm it falls on
-            if (bed >= kMaxBeds) break;
-            const horde::RouteCell& c = cells[i];
-            ++bed;
-            ByteWriter bw;
-            proto::write_smoke(bw, static_cast<uint8_t>(bed), proto::SmokeStyle::Ground,
-                               Vec3{static_cast<float>(c.x) + 0.5f,
-                                    static_cast<float>(c.y) + 0.5f,
-                                    static_cast<float>(c.z) - 0.35f},
-                               static_cast<uint8_t>(1), r, g, b, 0xE8,
-                               kStay, kThins, static_cast<uint8_t>(0));
-            for (auto& o : players)
-                if (o && o->peer && !o->loading && o->ext_smoke && o->playing()) send(*o, bw);
+        for (size_t f = 0; f < fronts.size(); ++f) {
+            const FrontRead& fr = fronts[f];
+            const uint32_t rgb = kFrontColour[fr.corner];
+            const uint8_t r = static_cast<uint8_t>((rgb >> 16) & 0xFFu),
+                          g = static_cast<uint8_t>((rgb >> 8) & 0xFFu),
+                          b = static_cast<uint8_t>(rgb & 0xFFu);
+            const int band = static_cast<int>(f) * kFrontBeds;
+            const std::vector<horde::RouteCell>& cells = fr.cells;
+            int bed = 0;
+            // The doorstep's tread first, then every couple outwards -
+            // the ids of the band count from the core, so the beds the
+            // defence watches keep their ids blink to blink.
+            for (size_t k = 0; k < cells.size(); ++k) {
+                if (k % kStride != 0 && k + 1 != cells.size()) continue;  // the last tread is said whatever rhythm it falls on
+                if (bed >= kFrontBeds) break;
+                const horde::RouteCell& c = cells[cells.size() - 1 - k];
+                ++bed;
+                ByteWriter bw;
+                proto::write_smoke(bw, static_cast<uint8_t>(band + bed),
+                                   proto::SmokeStyle::Ground,
+                                   Vec3{static_cast<float>(c.x) + 0.5f,
+                                        static_cast<float>(c.y) + 0.5f,
+                                        static_cast<float>(c.z) - 0.35f},
+                                   static_cast<uint8_t>(1), r, g, b, 0xE8,
+                                   kStay, kThins, static_cast<uint8_t>(0));
+                for (auto& o : players)
+                    if (o && o->peer && !o->loading && o->ext_smoke && o->playing()) send(*o, bw);
+            }
         }
     }
 

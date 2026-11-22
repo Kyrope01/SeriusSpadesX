@@ -137,9 +137,12 @@ struct Config {
     // spade's way must save before any walker takes it - the legs' walk
     // silent at a walker's feet counts as saving it all - and
     // dig_seconds is the host's own pace of the work, one voxel of the
-    // crossing taken off a dig_seconds; the walk's price of that voxel
-    // and the host's pace of it keep the one clock, kDigPenalty steps a
-    // block and dig_seconds a voxel.
+    // crossing taken off a dig_seconds - the living digger's own rhythm,
+    // three blocks the second. The walk's price of a block is kDigPenalty
+    // steps a block, and the two are separate knobs of it: the price says
+    // which walls are worth the errand, the pace says how fast a chosen
+    // one falls - a spade that works at the player's own speed costs a
+    // wave nothing in patience and a defended town exactly its blocks.
     // z grows downward, so a climb is the negative side of the delta.
     // kWalkDrop no longer bounds a crossing: it bounds a spawn. The anchor
     // of a wave stands at its ring's own ground level, never on a perch
@@ -149,7 +152,7 @@ struct Config {
     static constexpr int kFall = 63, kDigPenalty = 12;
     bool dig = true;
     static constexpr int kDigShortcut = 100;
-    double dig_seconds = 3.0;
+    double dig_seconds = 1.0 / 3.0;
     // A crossing that changes floor is a crossing apart: the pack walks
     // best on one level, and every block of climb or drop it spends is
     // priced at kLevelShy steps, so the flood keeps to the flat wherever
@@ -212,6 +215,12 @@ public:
     // way in the walk can take raises nothing, and the host says so when
     // the count falls short of the wave's price.
     int placed() const { return placed_; }
+    // The fronts a wave `wave` comes on: its ranked first ranks that the
+    // scout anchored, counted in the wave's own points - the ranks the
+    // placing raises its packs on, whatever the corners are. The host
+    // reads it to say one trail a front, each in its front's own colour:
+    // a wave of many fronts is watched as many ways in, not one.
+    int wave_fronts(int wave) const;
     // The corner of `rank` in the order the last wave walked its corners
     // in: rank 0 is where the wave comes from, anchored, its route truly
     // ending at the core's doorstep, the shortest first. When the terrain

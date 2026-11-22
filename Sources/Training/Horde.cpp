@@ -616,11 +616,27 @@ bool Horde::near_core(int x, int y, int cells) const {
 }
 
 bool Horde::corner_anchor(int corner, int& x, int& y) const {
-    if (corner < 0 || corner >= 4) return false;
+    // The world has ten sites to come from, not four: the guard was a
+    // four-corner world's own, and the ten-site world outgrew it - a
+    // corner past the third was anchored by the scout all the same and
+    // this read denied it, so a front on a high-numbered corner could
+    // raise its wave and still never be told to the host's own reading.
+    if (corner < 0 || corner >= Config::kSpawnSites) return false;
     if (anchor_x_[corner] < 0) return false;
     x = anchor_x_[corner];
     y = anchor_y_[corner];
     return true;
+}
+
+// The wave comes on this many anchored fronts, the ranked first of them
+// the wave's own points hold: the same count the placing raises its
+// packs on, read where the painting asks it - the host says one trail a
+// front, and here is how many trails a wave of `wave` says.
+int Horde::wave_fronts(int wave) const {
+    const int nc = cfg_.wave_points(wave);
+    int fronts = 0;
+    for (int r = 0; r < nc && anchor_x_[rank_corner_[r]] >= 0; ++r) ++fronts;
+    return fronts;
 }
 
 // The way in, one tread a cell: from wherever it starts the walk goes

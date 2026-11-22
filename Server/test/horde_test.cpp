@@ -299,6 +299,12 @@ void test_route() {
         h.tick(10.5);  // prep over: the wave is placed, its anchor kept
         int ax = -1, ay = -1;
         check(h.corner_anchor(0, ax, ay), "corner zero keeps its anchor");
+        // The fronts the paintings ask by name: one a point, the anchored
+        // ranks the wave's own number takes, never more than the map holds.
+        check(h.wave_fronts(1) == 1, "wave one walks one front");
+        check(h.wave_fronts(4) == 4, "wave four walks the four anchored fronts");
+        check(h.wave_fronts(6) == 4, "no more fronts than the anchored four");
+        check(h.wave_fronts(20) == 4, "past every cap the fronts hold at the anchors");
         check(h.distance(ax, ay) >= 0, "the anchor stands on the field");
         std::vector<horde::RouteCell> cells;
         check(h.trace_route(ax, ay, cells), "the route traces from the anchor");
@@ -542,6 +548,8 @@ void test_dig() {
         h.tick(10.5);
         check(h.phase() == horde::Phase::Wave && h.placed() > 0,
               "a walled town still stands its wave up");
+        check(h.wave_fronts(1) == 1 && h.wave_fronts(4) == 4,
+              "the sealed town's fronts are named for the painting");
         int ax = -1, ay = -1;
         check(h.corner_anchor(0, ax, ay) && ax >= 0 && ay >= 0,
               "the sealed town's wave anchors at the border");
@@ -562,6 +570,8 @@ void test_dig() {
         off.tick(10.5);
         check(off.phase() == horde::Phase::Wave && off.placed() == 0,
               "the licence off: the sealed town raises nothing");
+        check(off.wave_fronts(1) == 0,
+              "the licence off: no front is named, nothing is painted");
     }
 }
 

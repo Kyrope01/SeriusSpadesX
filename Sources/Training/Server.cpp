@@ -132,6 +132,14 @@ constexpr int kDigLaneMargin = 3;
 // the strokes stop - the crossing open, the face gone - the window
 // passes and the walker walks whatever the fields say again.
 constexpr double kDigStaySeconds = 2.0;
+// The road keeps its walker the same span: the worth gate reads every
+// tick on fields recomputed every half second, and a leader parked
+// where the shortcut and the road price the same reads yes and no in
+// turns - a pace of one, a swing of the other, back and forth, and
+// neither way ever gets walked. Every no of the gate anchors the
+// walker to the road, and the gate hands the spade back only when a
+// yes has held this long: the leader leaves, one way or the other.
+constexpr double kDigFlipSeconds = 2.0;
 // A leader stalled this long - stuck past the windup, and not already
 // swinging at a wall it is opening for the line - loses its line for
 // a while: a follower owed prints it cannot walk reads the field for
@@ -549,6 +557,11 @@ struct Player {
     // its windows apart - a digger stands by design, and the hop and the
     // fling would only spoil its work.
     double spade_at = -1e9;
+    // When the worth gate last said no: every refusal anchors the road
+    // here, and the road holds its walker the same span a stroke holds
+    // a face, so the call between the shortcut and the road is made
+    // once and kept, not flipped at every read of the gate.
+    double walk_since = -1e9;
     // The spawn point it walked in on: the corner its pack belongs to, so
     // a front's trail says itself from its own pack's head, in its own
     // colour. A person's is nobody's.
@@ -1302,6 +1315,7 @@ struct Server::Impl {
             p.foot_dist = -1;
             p.stall_windows = 0;
             p.dig_watch_at = -1.0;
+            p.walk_since = -1e9;   // born free to call it either way
             p.alive = true;
             p.tool = kToolWeapon;
             if (p.zombie) p.tool = kToolSpade;   // it never fires a shot
@@ -2339,9 +2353,23 @@ struct Server::Impl {
         // that gets finished, whatever the field's half-second churn
         // reads into the worth of it mid-hammer.
         const bool working = world_time - p.spade_at < kDigStaySeconds;
+        // One way or the other, and the call sticks: a refusal anchors
+        // the walker on the road, a stroke anchors the face, and
+        // neither releases its hold inside its window. Without the
+        // anchor, a leader standing where the shortcut and the road
+        // price alike swings between the two for as long as the fields
+        // keep flipping the gate - digging a moment, walking a moment,
+        // arriving at neither: the very milling this hunt set out to
+        // end.
         if (leg_led && !horde->dig_worth(cx, cy, fz) && !licensed &&
-            !working)
+            !working) {
+            p.walk_since = world_time;   // the road renews its hold
             return false;
+        }
+        if (p.walk_since >= 0.0 &&
+            world_time - p.walk_since < kDigFlipSeconds)
+            return false;   // the refusal is still fresh on its hold
+        p.walk_since = -1e9;
         int tx = cx, ty = cy, tz = fz;
         if (!horde->next_dig_step(cx, cy, fz, tx, ty, tz)) {
             // The walk only ever hands downhill over - and the wall a
@@ -2600,6 +2628,7 @@ struct Server::Impl {
                 q->walk_ref_at = world_time;
                 q->teleport_at = world_time;
                 q->spade_at = -1e9;   // the carried hold no face behind them
+                q->walk_since = -1e9;   // and hold no refusal either
             }
             log("the road carried a pinned pack %d treads, to %d, %d",
                 static_cast<int>(i), at.x, at.y);

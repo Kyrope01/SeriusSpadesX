@@ -2317,9 +2317,11 @@ struct Server::Impl {
             sep.x += dx / d * w;
             sep.y += dy / d * w;
         }
-        if (horde->near_core(cx, cy, 2)) {
+        if (zombie_at_core(cx, cy, fz)) {
             // It bites, it does not walk - but it still shuffles its
-            // neighbours out of its skin.
+            // neighbours out of its skin. One roofing the room the core
+            // hides in is not eating through the rock by standing over
+            // it: it walks on, it digs, it comes down for a real bite.
             const float sl = std::sqrt(sep.x * sep.x + sep.y * sep.y);
             if (sl > 0.15f) {
                 p.body.ori = Vec3{sep.x / sl, sep.y / sl, 0.0f};
@@ -2571,6 +2573,17 @@ struct Server::Impl {
             }
         }
     }
+    // The teeth's reach to the core: the cells around it in the plan,
+    // AND the walker's own footing in the band of the column's ground -
+    // its own level, give or take a pounce and a block stood on. The
+    // plan alone says near on any height, and a grave was dug with it:
+    // a horde walking the hill that roofs the room the core hides in
+    // ate through the rock by standing over it. Now it digs, it comes
+    // down, and the teeth meet the core standing on its own ground.
+    bool zombie_at_core(int cx, int cy, int fz) const {
+        return horde->near_core(cx, cy, 2) && fz > core_ground_z - 3 &&
+               fz <= core_ground_z + 1;
+    }
     // Teeth: the core first, any person in reach second. A bite a second.
     void zombie_bite(Player& p) {
         if (world_time < p.next_bite) return;
@@ -2578,7 +2591,7 @@ struct Server::Impl {
         const int cy = static_cast<int>(std::floor(p.body.pos.y));
         const int fz = static_cast<int>(std::floor(p.body.pos.z + 2.25f));
         bool bit = false;
-        if (horde->near_core(cx, cy, 2)) {
+        if (zombie_at_core(cx, cy, fz)) {
             horde->on_core_damaged(10);
             bit = true;
             if (world_time >= core_alarm_at) {

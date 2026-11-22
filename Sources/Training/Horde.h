@@ -309,7 +309,9 @@ public:
     // an important one is taken. False when the dig is off or its walk
     // has no way home either.
     bool dig_worth(int x, int y, int z) const;
-    // Whether a cell is within `cells` of the core, where the zombies bite.
+    // Whether a cell is within `cells` of the core in the plan - the
+    // height is no part of it; the teeth add the column's level, the
+    // host's zombie_at_core, so a walker stands ON things, not near them.
     bool near_core(int x, int y, int cells) const;
 
     // The anchor the last wave walked in from at `corner`: the far end of

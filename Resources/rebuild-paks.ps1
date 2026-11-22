@@ -2,6 +2,12 @@
 # the whole way beside the exe: the game folder stands alone, AppData is
 # never touched. mkpak.ps1 next to this file does the zipping.
 #
+#   .\rebuild-paks.ps1
+#
+# Nothing to type: the ZeroSpades.exe most recently built under the repo's
+# build folder is found and used - the exe the last build made. To install
+# somewhere else instead (a release folder a hand put together):
+#
 #   .\rebuild-paks.ps1 -GameDir "C:\path\to\the\game"     # the exe's folder
 #
 # What it does, in order:
@@ -17,8 +23,7 @@
 # win over these: they are reported below and left for a hand to remove.
 
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$GameDir
+    [string]$GameDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,7 +34,22 @@ function Fail([string]$why) {
     exit 1
 }
 
+$Repo = Split-Path -Parent $PSScriptRoot     # this file lives in Resources
 $Target = Join-Path $GameDir "Resources"
+
+if ($GameDir -eq "") {
+    $Build = Join-Path $Repo "build"
+    Write-Host "== Looking for the game under $Build" -ForegroundColor Cyan
+    $Exes = @(Get-ChildItem $Build -Recurse -Filter "ZeroSpades.exe" -ErrorAction SilentlyContinue)
+    if ($Exes.Count -eq 0) {
+        Fail("No ZeroSpades.exe under " + $Build + ": build the game first, or pass -GameDir.")
+    }
+    $Exe = $Exes | Sort-Object LastWriteTime | Select-Object -Last 1
+    $GameDir = $Exe.DirectoryName
+    $Target = Join-Path $GameDir "Resources"
+    Write-Host ("   found " + $Exe.FullName)
+    Write-Host ("   built " + $Exe.LastWriteTime)
+}
 
 if (-not (Test-Path -LiteralPath $GameDir)) {
     Fail("The game folder does not exist: " + $GameDir)

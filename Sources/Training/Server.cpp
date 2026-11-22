@@ -87,14 +87,14 @@ constexpr double kPounceAgain = 1.2;     // and this long between two of them
 // the fling the standstill gets are let loose again.
 constexpr int kZombieYoyoWindows = 6;
 // The stuck head's licence: the shortcut gate the spade's worth is
-// measured by is a frugal one - a hundred steps of detour before the
-// wall comes down - and a maze of short walls is a town of detours
-// too brief for it, so the pack that faces one paces and hops and
-// never draws the spade at all. A head stuck past its windup, and not
-// resting on the spade's own cadence at a wall it is already opening,
-// owes the licence anyway: the gate opens, and the crossing the spade's
-// field names is opened in turn, wall or ceiling, top down at the
-// dig's own pace.
+// measured by is a frugal one - fifty steps of detour before the wall
+// comes down - and a maze of short walls is a town of detours too brief
+// for it, so the pack that faces one paces and hops and never draws
+// the spade at all. A head stuck past its windup, and not resting on
+// the spade's own cadence at a wall it is already opening, owes the
+// licence anyway: the gate opens, and the crossing the spade's field
+// names is opened in turn, wall or ceiling, top down at the dig's own
+// pace.
 constexpr double kStuckDigWindup = 3.0;
 // A leader stalled this long - stuck past the windup, and not already
 // swinging at a wall it is opening for the line - loses its line for
@@ -108,6 +108,15 @@ constexpr double kStuckDigWindup = 3.0;
 // prints and the chase resume: only the head keeps the spade, one
 // breach a crossing as it always was.
 constexpr double kStuckHeadDisband = 6.0;
+// The pack the terrain pins past everything it has been owed - the hop,
+// the fling, the licence, the line come apart - has one mercy left: the
+// head and its whole line are carried down the road they read, onto a
+// floor the legs count and under the room a wave is born in. Slow to
+// arm and slower to re-arm, that the road, more than the mercy, stays
+// the way home.
+constexpr double kStuckTeleport = 15.0;
+constexpr double kTeleportAgain = 20.0;
+constexpr int kTeleportAhead = 12;
 // The beat the way in's vapour is laid afresh on: the reading re-read,
 // the beds re-said, an obstacle answered within the beat - the trail
 // follows the ground, and the ground is moved on while the walk is on.
@@ -483,6 +492,10 @@ struct Player {
     int stall_windows = 0;
     // When it last flung itself at the step it could not climb.
     double pounce_at = -1e9;
+    // When its line last rode the last resort down the road: the mercy
+    // re-arms slower than anything else the stuck are owed, that the
+    // road, more than the carrying, stays the way home.
+    double teleport_at = -1e9;
     // When its spade last took a block off what it faces: the pace of the
     // dig, one voxel a dig_seconds, and the tell that tells the unstick
     // its windows apart - a digger stands by design, and the hop and the
@@ -2254,7 +2267,7 @@ struct Server::Impl {
         const int cx = static_cast<int>(std::floor(p.body.pos.x));
         const int cy = static_cast<int>(std::floor(p.body.pos.y));
         const int fz = static_cast<int>(std::floor(p.body.pos.z + 2.25f));
-        // The stuck head's licence: worth is a frugal gate - a hundred
+        // The stuck head's licence: worth is a frugal gate - fifty
         // steps of detour saved before the spade draws - and the maze
         // of short walls never owes that much. A head stuck past the
         // windup, and not resting on the spade's own cadence at a wall
@@ -2314,6 +2327,67 @@ struct Server::Impl {
         // A step, or a drop of honest air: walked, not spaded.
         p.input.mf = true;
         return true;
+    }
+
+    // The pack the terrain pinned, carried down its own road: every last
+    // resort spent - the windows counted, the hopped hops, the fling
+    // flung, the licence drawn, the line disbanded - and the head still
+    // stands on its stuck. The road it reads is the spade's own trace of
+    // the way home, and the first tread of it kTeleportAhead treads down
+    // that opens a floor the legs count, under the clearing a wave is
+    // born in, stands the head and its whole line up, their scores wiped
+    // and their order kept - the mercy walks them past the stretch the
+    // terrain refused, never off the road, never over a gate. What the
+    // walk still owes from there, the walk pays: no distance skipped
+    // that the route did not cross itself. Players pass through players,
+    // and the pile the carrying stands in one place walks apart in a
+    // step or two of its own - a wave born scattered reads the same.
+    void teleport_pinned(Player& p) {
+        if (!p.zombie || !p.alive || p.ahead_id >= 0) return;
+        if (p.body.airborne) return;
+        if (world_time - p.teleport_at < kTeleportAgain) return;
+        const int cx = static_cast<int>(std::floor(p.body.pos.x));
+        const int cy = static_cast<int>(std::floor(p.body.pos.y));
+        // The road the pack reads: the spade's trace, the same way home
+        // the advice names with - the legs' trace dies where the legs
+        // do, and a head pinned is exactly there. No trace, no mercy.
+        std::vector<horde::RouteCell> route;
+        if (!horde->trace_dig(cx, cy, route)) return;
+        for (size_t i = kTeleportAhead; i < route.size(); ++i) {
+            const horde::RouteCell& at = route[i];
+            if (std::abs(at.x - cx) + std::abs(at.y - cy) < 4) continue;
+            const int zl = horde->stand_floor(at.x, at.y);
+            if (zl < 0) continue;   // no legs-counted floor the born clear above
+            // The whole line of it, link by link: whoever follows the
+            // head, and whoever follows them, comes along.
+            std::vector<Player*> line{&p};
+            for (size_t k = 0; k < line.size(); ++k) {
+                const int ahead = line[k]->id;
+                for (auto& q : players) {
+                    if (!q || !q->zombie || !q->alive) continue;
+                    if (q->ahead_id != ahead) continue;
+                    line.push_back(q.get());
+                }
+            }
+            const Vec3 dest{static_cast<float>(at.x) + 0.5f,
+                            static_cast<float>(at.y) + 0.5f,
+                            static_cast<float>(zl) - 2.4f};
+            for (Player* q : line) {
+                q->body = physics::Body{};
+                q->body.pos = dest;
+                q->body.eye = dest;
+                q->input = physics::Input{};
+                q->foot_dist = -1;
+                q->stall_windows = 0;
+                q->stuck_at = -1.0;
+                q->walk_ref = dest;
+                q->walk_ref_at = world_time;
+                q->teleport_at = world_time;
+            }
+            log("the road carried a pinned pack %d treads, to %d, %d",
+                static_cast<int>(i), at.x, at.y);
+            return;
+        }
     }
 
     // A zombie's mind: its pack walks one path - it holds at the heel of the
@@ -2654,6 +2728,12 @@ struct Server::Impl {
             } else {
                 p.stuck_at = -1.0;
             }
+            // The last resort, asked only after the walk's own answers
+            // have all failed the head: the pinned line rides its road
+            // down (teleport_pinned above, for the prose of it).
+            if (p.ahead_id < 0 && p.stuck_at >= 0.0 &&
+                world_time - p.stuck_at >= kStuckTeleport)
+                teleport_pinned(p);
         }
     }
     // The teeth's reach to the core: the cells around it in the plan,

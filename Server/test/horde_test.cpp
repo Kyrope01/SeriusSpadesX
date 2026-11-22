@@ -365,10 +365,10 @@ void test_route() {
                     map.set_block(x, y, WALL_TOP + 1, true);
                     map.set_block(x, y, WALL_TOP + 2, true);
                 } else {
-                    // The gate: a lintel above the plain - two open voxels
-                    // under it, the road through.
+                    // The gate: a lintel above the plain - three open
+                    // voxels under it, the road the three-tall dead take.
+                    map.set_block(x, y, WALL_TOP - 2, true);
                     map.set_block(x, y, WALL_TOP - 1, true);
-                    map.set_block(x, y, WALL_TOP, true);
                 }
             }
         horde::Horde h(map, horde_cfg(256, 256));
@@ -393,6 +393,25 @@ void test_route() {
             }
         check(through && on_floor, "the wave enters by the tunnel, walking its floor");
         check(h.placed() == 20, "the wave stands up outside the walls");
+    }
+    // The dead stand three tall: the two open voxels the walk once
+    // demanded overhead let the paper count floors their bodies could
+    // never stand under, and the packs the plan fed there piled at the
+    // mouths of low tunnels, wave on wave. A lintel that leaves the
+    // third voxel open counts the floor again: the walk only promises
+    // what a body can take.
+    {
+        SolidMap map;
+        plain(map);
+        map.set_block(260, 256, GROUND_TOP - 3, true);  // a lintel leaving
+                                                        // two open beneath
+        horde::Horde h(map, horde_cfg(256, 256));
+        check(h.distance(260, 256) < 0,
+              "a two-voxel gap is no standing room for the three-tall dead");
+        map.set_block(260, 256, GROUND_TOP - 3, false);
+        horde::Horde h2(map, horde_cfg(256, 256));
+        check(h2.distance(260, 256) >= 0,
+              "the third voxel cleared: the floor a body fits counts");
     }
     // Two walls the walk cannot cross: a cell shut off the field traces
     // nothing, and a core sealed away still anchors its corner - wherever
@@ -603,13 +622,13 @@ void test_dig() {
                     map.set_block(x, y, z, true);  // the mass the room hides in
         for (int y = 255; y <= 257; ++y)
             for (int x = 255; x <= 257; ++x)
-                for (int z = 35; z <= 38; ++z)
-                    map.set_block(x, y, z, false);  // the room: four open
+                for (int z = 34; z <= 38; ++z)
+                    map.set_block(x, y, z, false);  // the room: five open
                                                   // voxels, its floor at 39
         map.set_block(256, 256, 37, true);   // the core's own blocks kept,
         map.set_block(256, 256, 38, true);   // the marker names its top, 37 -
-                                             // headroom two deep, a floor the
-                                             // dead could stand on
+                                             // headroom three deep, a floor the
+                                             // three-tall dead could stand on
         horde::Config cfg = horde_cfg(256, 256);
         cfg.core_top_z = 37;
         horde::Horde h(map, cfg);

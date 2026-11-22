@@ -66,12 +66,15 @@ int Horde::distance(int x, int y) const {
 
 // --- the standing surfaces ---------------------------------------------------
 
-// A column is not one floor. Every solid run top with two open voxels above
-// it is a surface the dead can stand on - the outside of a wall top is one,
-// and so is the floor of a tunnel through it - and the field fills them all,
-// so the walk goes under as well as over, and no gate an arch leaves open
-// closes a town. The surfaces are scanned once a recompute and cached; a
-// column asked for between an edit and the refresh serves a step a tick
+// A column is not one floor. Every solid run top with kStandHead open voxels
+// above it is a surface the dead can stand on - the outside of a wall top is
+// one, and so is the floor of a tunnel through it - and the field fills them
+// all, so the walk goes under as well as over, and no gate an arch leaves
+// open closes a town. The three the dead stand tall is the mercy the plan
+// owes them: the pair it once asked counted floors under low ceilings their
+// bodies could never take, and the packs the paper fed there piled at the
+// mouth, wave on wave. The surfaces are scanned once a recompute and cached;
+// a column asked for between an edit and the refresh serves a step a tick
 // early, nothing worse.
 void Horde::fill_surfaces(int x, int y) {
     const size_t i = cell_index(x, y);
@@ -82,9 +85,12 @@ void Horde::fill_surfaces(int x, int y) {
         const int solid = static_cast<int>((col >> z) & 1u);
         if (solid && !prev_solid) {
             // A solid run opens at z: its top voxel, standable only with
-            // two open voxels above it. z counts down, so the sky sits at
-            // the lower z and the pair above the surface is z-2 and z-1.
-            if (z >= 2 && ((col >> (z - 2)) & 3u) == 0) {
+            // kStandHead open voxels above it - the dead stand three
+            // tall. z counts down, so the sky sits at the lower z and
+            // the band above the surface runs z-kStandHead to z-1.
+            if (z >= Config::kStandHead &&
+                ((col >> (z - Config::kStandHead)) &
+                 ((1ull << Config::kStandHead) - 1u)) == 0) {
                 surf_z_[i * kSurfMax + n] = static_cast<int16_t>(z);
                 if (++n == kSurfMax) break;
             }
@@ -160,14 +166,15 @@ int Horde::ground(int x, int y) {
     return surface(x, y, 0);
 }
 
-// A body's standing room, the host's own measure of it. The walk asks two
-// open voxels of a floor, but the dead stand taller than that and half a
-// block wide either way, and one raised where that does not fit is one
-// raised inside a wall - the pocket a cliff face keeps, the shelf under a
-// lintel, a tunnel's bore - never to leave it. A spawn floor at z asks
-// four open voxels above it, its own column's and every side's; the map
-// has no voxels past its edges, so a border cell's missing side is sky.
-// The field keeps its own two: the walk is a plan; this is a birth.
+// A body's standing room, the host's own measure of it. The walk asks
+// kStandHead open voxels of a floor - the three the dead stand tall - and
+// half a block wide either way, and one raised where that does not fit is
+// one raised inside a wall - the pocket a cliff face keeps, the shelf
+// under a lintel, a tunnel's bore - never to leave it. A spawn floor at
+// z asks four open voxels above it, its own column's and every side's;
+// the map has no voxels past its edges, so a border cell's missing side
+// is sky. The field keeps its own three: the walk is a plan; this is a
+// birth, and the birth keeps its breath of margin over the plan.
 bool Horde::clear_of(int x, int y, int z) const {
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
     if (z < 4) return false;  // not the room above, even in the open sky
@@ -199,6 +206,18 @@ bool Horde::box_clear(int x, int y, int z) const {
             if (map_.column(nx, ny) & window) return false;
         }
     return true;
+}
+
+// The ground the last resort lands on: the floor the legs count, opened
+// under the birth clearing - a carried pack stands only on honest
+// legs-ground, the road it read, never over a gate or down a hole. -1
+// when the cell holds no floor the dead may be stood on.
+int Horde::stand_floor(int x, int y) const {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return -1;
+    const int k = best_state(x, y);
+    if (k < 0) return -1;
+    const int z = surf_z_[cell_index(x, y) * kSurfMax + k];
+    return box_clear(x, y, z) ? z : -1;
 }
 
 // --- the field ---------------------------------------------------------------
@@ -378,12 +397,14 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
                     nd += Config::kLevelShy * (dz < 0 ? -dz : dz);
                 }
                 // Keeps to the open: the landing's two shoulder columns,
-                // the sides the step runs past - room asks the same two
-                // voxels the walk demands overhead.  A map's edge is sky;
-                // on open ground this price is nothing and the walk stays
-                // a step a cell, as the traces and the tests have read it.
+                // the sides the step runs past - room asks the same
+                // kStandHead voxels the walk demands overhead. A map's
+                // edge is sky; on open ground this price is nothing and
+                // the walk stays a step a cell, as the traces and the
+                // tests have read it.
                 const int z2 = surf_z_[ni * kSurfMax + m];
-                const uint64_t room = 3ull << (z2 - 2);
+                const uint64_t room =
+                    ((1ull << Config::kStandHead) - 1ull) << (z2 - Config::kStandHead);
                 const uint64_t side_a =
                     kDx[q] != 0 ? map_.column(nx, ny + 1) : map_.column(nx + 1, ny);
                 const uint64_t side_b =

@@ -151,10 +151,11 @@ struct Config {
     // are the way, and cliffs and pits wall both ways. Beside that walk
     // the dig walk runs, the spade's own: it takes what the legs refuse -
     // a fall may pour up to kFall, and a climb beyond the jump is crossed
-    // at kDigPenalty steps a block, about the time its spade takes that
-    // block off, so a wall is a way in only when the way around it is the
-    // longer errand. Rooms without headroom stay unreachable even to the
-    // spade: the walk stands on surfaces, and a buried floor is none.
+    // at kDigPenalty steps a block, priced at the balance phase's own
+    // say - half the errand it once stood at, that a wall comes down the
+    // sooner a wood of trunks and low folds racks its detour up. Rooms
+    // without headroom stay unreachable even to the spade: the walk
+    // stands on surfaces, and a floor a body cannot stand under is none.
     // The knobs of it, for the balance phase to turn: `dig` is the
     // licence whole (the walk one way, the veto and the anchors stay the
     // legs' own), kDigShortcut is how much of the legs' own way home the
@@ -173,9 +174,17 @@ struct Config {
     // more than kWalkDrop above it - a wave begun on a canopy lands in
     // foliage its legs cannot cross.
     static constexpr int kWalkDrop = 5, kWalkClimb = 2;
-    static constexpr int kFall = 63, kDigPenalty = 12;
+    // The dead stand three tall, and no plan may promise a floor their
+    // bodies cannot stand under: kStandHead open voxels overhead is what
+    // every counted surface asks. The two the walk once demanded were the
+    // paper's own mercy - a low tunnel mouth or a canopy's hem counted a
+    // floor there, and the pack that took it piled at a standstill the
+    // terrain won, wave on wave. The plan now asks what the births always
+    // did, one short of the clear_of four: a floor the dead truly fit.
+    static constexpr int kStandHead = 3;
+    static constexpr int kFall = 63, kDigPenalty = 6;
     bool dig = true;
-    static constexpr int kDigShortcut = 100;
+    static constexpr int kDigShortcut = 50;
     double dig_seconds = 1.0 / 3.0;
     // A crossing that changes floor is a crossing apart: the pack walks
     // best on one level, and every block of climb or drop it spends is
@@ -340,6 +349,14 @@ public:
     // pack's line of march - the host paints it so the way can be watched.
     // False when the cell is not on the walk at all.
     bool trace_route(int x, int y, std::vector<RouteCell>& out);
+    // The ground a carried pack may stand on: the floor of the cell the
+    // legs themselves count, opened under the clearing a wave is born
+    // in - five square, four open high. The last resort the host keeps
+    // for the pack the terrain pins rides the road to this ground only
+    // (see teleport_pinned on the host side): a mercy that lands on
+    // honest legs-ground never over a gate. -1 when the cell holds no
+    // floor the dead can be stood on.
+    int stand_floor(int x, int y) const;
     // The same read off the dig walk's own field: the crossing downhill
     // may be a wall's top or a drop, for the dig walk takes them - the
     // route handed back is the spade's line of march, painted the same
@@ -392,10 +409,10 @@ private:
     // of its soles. -1 when no floor the field reaches is near the
     // asking height. Ties keep the cheaper floor.
     int near_state(int x, int y, int z) const;
-    // A body's standing room at the given floor: the walk demands two open
-    // voxels, the dead stand four tall and ask leave to step. A birthplace
-    // asks it of its own column and of every side, so no wave member rises
-    // inside a wall.
+    // A body's standing room at the given floor: the walk demands three
+    // open voxels, the three the dead stand tall, and a birth asks four,
+    // a breath of margin over the plan. A birthplace asks it of its own
+    // column and of every side, so no wave member rises inside a wall.
     bool clear_of(int x, int y, int z) const;
     // The clearing a wave is born in: five cells square, four voxels
     // high, every column of the square open above the floor at z. The

@@ -439,19 +439,61 @@ namespace spades {
 			// short line that rounds to no crumb between them.
 			std::vector<Vector3> crumbs;
 			crumbs.reserve(points.size() * 2 + 2);
-			auto add = [&](const Vector3& c) {
-				const int x = static_cast<int>(c.x);
-				const int y = static_cast<int>(c.y);
+
+			// One way's own side of the road. Ways that share a corridor -
+			// fronts funnelled through one door, most of their way walked
+			// over another's - would lay crumb upon crumb, the one colour
+			// lost in the other along all they share. So every front
+			// keeps its own side of the way it walks, held off the line's
+			// centre by its own hand's breadth, always the same side, the
+			// left of the walk: two fronts through one corridor stand as
+			// two lines side by side, both read, and where ways cross they
+			// cross with a knot of two colours, not a fight over pixels.
+			// The breadth comes off the front's own number, no two fronts
+			// on one side among the first dozen, and the half-block into
+			// the cell keeps the crumb of a way near its centre to its
+			// own column's floor (the cell it is pushed into is the cell
+			// it stands on).
+			const float lat =
+			  (static_cast<float>((front * 7U + 3U) % 13U) - 6.0F) * 0.1F;
+			// The side kept over one stretch of the way: always the left
+			// of the walk, so bends bend the side with them and a side
+			// stays a side however the way turns. A stretch walked
+			// straight up or down has no left worth speaking of; its
+			// crumbs keep the centre, one way through a stair standing
+			// where the stair is.
+			auto sideOf = [&](const Vector3& a, const Vector3& b, float& px, float& py) {
+				px = a.y - b.y;
+				py = b.x - a.x;
+				const float len = std::sqrt(px * px + py * py);
+				if (len < 1.0e-4F) {
+					px = 0.0F;
+					py = 0.0F;
+					return;
+				}
+				const float k = lat / len;
+				px *= k;
+				py *= k;
+			};
+			auto add = [&](const Vector3& c, float px, float py) {
+				const int x = static_cast<int>(c.x + px);
+				const int y = static_cast<int>(c.y + py);
 				const int z = TrailFloor(*map, x, y, static_cast<int>(c.z + 0.5F));
 				// A half-block into the cell, a little above the floor:
 				// the crumb stands on the way it marks, half in it, not
 				// buried in the ground it runs over.
-				crumbs.push_back(
-				  MakeVector3(c.x + 0.5F, c.y + 0.5F, static_cast<float>(z) - 0.35F));
+				crumbs.push_back(MakeVector3(c.x + px + 0.5F, c.y + py + 0.5F,
+				                             static_cast<float>(z) - 0.35F));
 			};
 			if (!points.empty()) {
-				add(points.front());
 				if (points.size() > 1) {
+					float px, py;
+					// The two ends of the way are crumbs whatever the
+					// length falls on: the walk's own front and the
+					// core's doorstep both stand marked even on a short
+					// line that rounds to no crumb between them.
+					sideOf(points[0], points[1], px, py);
+					add(points.front(), px, py);
 					// Where the next crumb falls, in blocks of the way
 					// walked since the last one.
 					float toNext = 1.0F;
@@ -459,11 +501,12 @@ namespace spades {
 						const Vector3& a = points[s];
 						const Vector3& b = points[s + 1];
 						const float seg = (b - a).GetLength();
+						sideOf(a, b, px, py);
 						float walked = 0.0F;
 						while (walked + toNext <= seg) {
 							walked += toNext;
 							toNext = 1.0F;
-							add(a + (b - a) * (walked / seg));
+							add(a + (b - a) * (walked / seg), px, py);
 						}
 						toNext -= seg - walked;
 						// A float's own dust, after a hundred turns of the
@@ -473,7 +516,11 @@ namespace spades {
 						if (toNext < 0.0F)
 							toNext = 0.0F;
 					}
-					add(points.back());
+					sideOf(points[points.size() - 2], points.back(), px, py);
+					add(points.back(), px, py);
+				} else {
+					// A way stood on one spot: no walk, no side to keep.
+					add(points.front(), 0.0F, 0.0F);
 				}
 			}
 			if (crumbs.empty())

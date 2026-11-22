@@ -139,8 +139,12 @@ namespace spades {
 			// or a touch slighter than its neighbour, front by front,
 			// every way one breadth along itself, and the planes that
 			// overlapped fall out of step, the flicker gone with them.
+			// (The number taken off before it is made a float: unsigned
+			// has no negatives, and nought less six went once round the
+			// whole world, a girth of billions that the renderer drew
+			// as a cube past the sky, every even front's way unseen.)
 			const float girth =
-			  1.0F + static_cast<float>(((front * 7U) % 13U) - 6U) * (1.0F / 60.0F);
+			  1.0F + (static_cast<float>((front * 7U) % 13U) - 6.0F) * (1.0F / 60.0F);
 			const float scale = size / 3.0F * girth;
 
 			// One way's own beat. A line reads as a line only walking

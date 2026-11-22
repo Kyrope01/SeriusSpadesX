@@ -2279,7 +2279,35 @@ struct Server::Impl {
         if (leg_led && !horde->dig_worth(cx, cy, fz) && !stuck_licence)
             return false;
         int tx = cx, ty = cy, tz = fz;
-        if (!horde->next_dig_step(cx, cy, fz, tx, ty, tz)) return false;
+        if (!horde->next_dig_step(cx, cy, fz, tx, ty, tz)) {
+            // The walk only ever hands downhill over - and the wall a
+            // stuck head faces prices nothing downhill, whatever its
+            // height: without this second reading the licence the
+            // comment above promises would be a no-op, the advice
+            // silent at every wall in the land. So the licensed head
+            // reads the one column it faces straight off the map:
+            // solid at its own foot level, up to that run's own top,
+            // chipped from the top, a stroke a voxel, until the climb
+            // is one the legs make after all - and the field, freshly
+            // recomputed, pours the pack through the breach.
+            if (!stuck_licence) return false;
+            const float ox = std::fabs(p.body.ori.x),
+                        oy = std::fabs(p.body.ori.y);
+            int sx = 0, sy = 0;
+            if (ox > oy)
+                sx = p.body.ori.x > 0.f ? 1 : -1;
+            else if (oy > 1e-3f)
+                sy = p.body.ori.y > 0.f ? 1 : -1;
+            else
+                return false;   // facing nowhere in particular: no call
+            tx = cx + sx;
+            ty = cy + sy;
+            if (!map.solid(tx, ty, fz - 1))
+                return false;   // nothing to stand against at the feet
+            int z = fz - 1;
+            while (z > 0 && map.solid(tx, ty, z - 1)) --z;   // the run's top
+            tz = z;
+        }
         const float dx = static_cast<float>(tx) + 0.5f - p.body.pos.x;
         const float dy = static_cast<float>(ty) + 0.5f - p.body.pos.y;
         const float dl = std::sqrt(dx * dx + dy * dy);

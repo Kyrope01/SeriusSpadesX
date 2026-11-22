@@ -433,7 +433,17 @@ namespace spades {
 
 			MovePlayer(dt);
 
-			if (tool == ToolSpade) {
+			// The walking dead borrow a living player's shape, and the
+			// swing the wire animates in their hands must stay a show:
+			// the block-health trail below is the living digger's own
+			// paper. A remote spade in a zombie's hands cracks the
+			// blocks its facing names - the first of the living's two
+			// hits, never the second, for the destroy is the local
+			// player's alone to send - and the walls all along the
+			// horde's way would read as half-dug forever, cracking and
+			// healing and never breaking. The horde's own strokes are
+			// the server's, block for block, and they need no help here.
+			if (tool == ToolSpade && (isLocal || !IsZombie())) {
 				if (weapInput.primary) {
 					if (world.GetTime() > nextSpadeTime) {
 						UseSpade(false);

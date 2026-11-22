@@ -2331,6 +2331,20 @@ struct Server::Impl {
                 if (map.solid(tx, ty, z)) { spade_z = z; break; }
             }
         }
+        // The lane the stroke cuts runs three wide. A slot one cube
+        // wide reads open to the field yet still pinches a body whose
+        // box asks more room than a single column ever gives, and the
+        // head chips at a breach its own legs cannot enter. So the
+        // stroke takes the focus voxel and its two lateral mates at
+        // once, the left and the right of it on the axis the walk
+        // does not step along, and the lane is wide the whole way
+        // down: the mates ride along only onto rock, the core holds
+        // its blocks against any of the three, and each fallen voxel
+        // carries its own BlockAction to the wire.
+        const int fx = tx - cx, fy = ty - cy;
+        const bool along_x = fx * fx >= fy * fy;
+        const int lx = along_x ? 0 : 1;
+        const int ly = along_x ? 1 : 0;
         if (spade_z >= 0) {
             p.input.mf = false;   // it works standing, not pressed at its wall
             if (p.ahead_id >= 0) return true;   // the line waits on its head
@@ -2338,16 +2352,24 @@ struct Server::Impl {
             if (!map.solid(tx, ty, spade_z)) return true;   // the field has not caught up yet
             if (core_column_cell(tx, ty, spade_z)) return true;
             std::vector<Cell> removed;
-            map.destroy_point(tx, ty, spade_z, &removed);
+            for (int i = -1; i <= 1; ++i) {
+                const int bx = tx + lx * i;
+                const int by = ty + ly * i;
+                if (i != 0 && !map.solid(bx, by, spade_z))
+                    continue;   // a mate rides along only onto rock
+                if (core_column_cell(bx, by, spade_z))
+                    continue;   // the core holds, mate or focus
+                map.destroy_point(bx, by, spade_z, &removed);
+                ByteWriter bw;
+                bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+                bw.write_u8(static_cast<uint8_t>(p.id));
+                bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
+                bw.write_i32(bx);
+                bw.write_i32(by);
+                bw.write_i32(spade_z);
+                broadcast(bw, true);
+            }
             touched(removed, false);
-            ByteWriter bw;
-            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
-            bw.write_u8(static_cast<uint8_t>(p.id));
-            bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
-            bw.write_i32(tx);
-            bw.write_i32(ty);
-            bw.write_i32(spade_z);
-            broadcast(bw, true);
             p.spade_at = world_time;
             show_swing(p, horde_cfg.dig_seconds);
             return true;

@@ -113,6 +113,14 @@ constexpr int kDigWatchGain = 3;
 // cannot finish is climbed a flight at a time - a staircase the
 // legs walk as the spade goes on.
 constexpr int kDigFlightDepth = 3;
+// The shoulder the lane keeps: a trench pressed to a wall serves
+// its bodies one at a time and queues the wave behind them, and
+// the pack that cannot pass its own stalled head fills the lane
+// the way the dead filled the gallery. So the flight stroke clears
+// this many columns past each edge of the lane, at the height of
+// the rooms it cuts: whatever wall stands closer than three blocks
+// to the walking line comes down with the stroke.
+constexpr int kDigLaneMargin = 3;
 // A leader stalled this long - stuck past the windup, and not already
 // swinging at a wall it is opening for the line - loses its line for
 // a while: a follower owed prints it cannot walk reads the field for
@@ -2413,13 +2421,24 @@ struct Server::Impl {
                 // the stuck, the very cave the pack was found
                 // milling in. Two clear over the stand is the arc
                 // the climb asks, and the stair the stroke leaves
-                // is a stair the dead actually climb. The lane
-                // holds its three widths, the core holds against
-                // every cell, and the air rides along unharmed.
+                // is a stair the dead actually climb.
+                // The lane holds its three widths for the walk and
+                // its shoulder besides: a wall standing at the side
+                // of the trench presses the pack into the width of
+                // its own line, and a head stalled in a pocket
+                // queues the wave behind it with no room to be
+                // overtaken in - the lane pressed to a cliff is a
+                // second cave. So the stroke clears kDigLaneMargin
+                // columns past each edge of the lane at the height
+                // of the rooms it cuts, and a wall nearer than
+                // three blocks to the walking line comes down with
+                // the stroke: the core holds against every cell
+                // still, the air rides along unharmed, and the
+                // ground every tread stands on is left standing.
                 for (int i = 0; i < kDigFlightDepth; ++i) {
                     const int sx = tx + fx * i;
                     const int sy = ty + fy * i;
-                    for (int j = -1; j <= 1; ++j) {
+                    for (int j = -1 - kDigLaneMargin; j <= 1 + kDigLaneMargin; ++j) {
                         const int bx = sx + lx * j;
                         const int by = sy + ly * j;
                         for (int k = 0; k < horde::Config::kStandHead + 2; ++k) {

@@ -2392,7 +2392,45 @@ struct Server::Impl {
         int spade_z = -1;
         bool flight = false;
         if (climb > horde::Config::kWalkClimb) {
-            spade_z = tz;
+            // THE FRONTAL OATH: the advice hands back the crossing it
+            // priced cheapest, and the cheapest crossing of a long mass
+            // is a saddle over at its end - a walk along the base, a
+            // stair dug SIDEWAYS into the body, a gallery that crawls
+            // the wall all evening and never once tops out, for the
+            // crossing it serves lies elsewhere than where the spade
+            // bites. So the wall decides, not the counsel: of the four
+            // neighbours, the face is the one solid at the standing head
+            // whose run stands the tallest - and the stair is cut
+            // entrance-first INTO that mass, a flight a stroke, over
+            // the crest straight above it. No wall at the standing head
+            // - a cliff across a gap, a crossing the legs would have to
+            // be carried to - keeps the counsel's own column, as it
+            // always was.
+            int wx = cx, wy = cy, wz = -1;
+            int best = -1;
+            const int kFx[4] = {1, -1, 0, 0};
+            const int kFy[4] = {0, 0, 1, -1};
+            for (int n = 0; n < 4; ++n) {
+                const int nx = cx + kFx[n], ny = cy + kFy[n];
+                if (!map.solid(nx, ny, fz - 1)) continue;
+                int z0 = fz - 1;
+                while (z0 > 0 && map.solid(nx, ny, z0 - 1)) --z0;
+                const int c0 = fz - z0;
+                if (c0 > best) {
+                    best = c0;
+                    wx = nx;
+                    wy = ny;
+                    wz = z0;
+                }
+            }
+            if (best > 0) {
+                tx = wx;
+                ty = wy;
+                tz = wz;
+                spade_z = wz;
+            } else {
+                spade_z = tz;
+            }
             flight = true;
         } else if (tz > fz) {
             for (int z = fz; z < tz; ++z) {

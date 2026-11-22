@@ -355,6 +355,12 @@ public:
     // this one is the floor they are on, or -1 when no floor of the
     // column near z is on the walk.
     int distance(int x, int y, int z) const;
+    // The same read off the spade's own field: the dig walk's way home
+    // from the floor a body at z stands on, or -1 when no floor of the
+    // column near z is on that walk. The walker the spade leads crosses
+    // ground the legs price no way over, and its progress is the dig
+    // walk's own count, never the silence of the field it was never on.
+    int dig_distance(int x, int y, int z) const;
 
 private:
     // The most standing surfaces one column may carry: a wall's top and the

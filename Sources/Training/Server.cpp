@@ -472,10 +472,13 @@ struct Player {
     // the spade comes out only where the dig walk says it pays.
     double stuck_at = -1.0;
     // The walk's distance read at its feet, kept window by window: the
-    // moving-stuck's tell. A leader that has not stood on a lower floor
-    // of the walk for kZombieYoyoWindows is pacing - the yo-yo - and is
-    // owed the standstill's way out. Followers keep no score: a heel that
-    // holds its place in the line stirs on the spot by design.
+    // moving-stuck's tell. The score is the legs' read where the legs
+    // lead, and the spade walk's own where they fall silent and the
+    // spade is the one leading. A leader that has not reached a lower
+    // reading for kZombieYoyoWindows is pacing - the yo-yo, and the
+    // same when neither walk reads anything underfoot - and is owed the
+    // standstill's way out. Followers keep no score: a heel that holds
+    // its place in the line stirs on the spot by design.
     int foot_dist = -1;
     int stall_windows = 0;
     // When it last flung itself at the step it could not climb.
@@ -2584,11 +2587,26 @@ struct Server::Impl {
             p.walk_ref_at = world_time;
             const int fd =
                 p.body.airborne ? -1 : horde->distance(cx, cy, fz);
-            if (p.ahead_id >= 0 || fd < 0) {
+            // The score off the field that leads the walker: the legs read
+            // first, and where the legs run silent the spade's own count
+            // stands in - the walker the dig walk leads crosses ground the
+            // legs price no way over, the hill above a sealed room, the wall
+            // a maze turns it against, and its progress is that walk's own
+            // count, never the silence of the field it was never on. And
+            // the silence of BOTH - a leader pacing with its feet nowhere
+            // either walk counts - is scored window by window instead of
+            // excused: the pacing is a standstill to the walk either way,
+            // and only counted windows arm the hop, the fling, the spade's
+            // licence and the line's disband to answer it.
+            const int score = fd >= 0 ? fd : horde->dig_distance(cx, cy, fz);
+            if (p.ahead_id >= 0 || p.body.airborne) {
                 p.foot_dist = -1;          // off the walk or a step in line
                 p.stall_windows = 0;
-            } else if (p.foot_dist < 0 || fd < p.foot_dist) {
-                p.foot_dist = fd;          // a lower floor reached: it walks
+            } else if (score < 0) {
+                p.foot_dist = -1;          // pacing: nowhere either walk
+                ++p.stall_windows;         // counts, and the windows add up
+            } else if (p.foot_dist < 0 || score < p.foot_dist) {
+                p.foot_dist = score;        // a lower floor reached: it walks
                 p.stall_windows = 0;
             } else {
                 ++p.stall_windows;         // moving, maybe - nearer, never

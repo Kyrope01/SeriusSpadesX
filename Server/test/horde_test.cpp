@@ -617,6 +617,10 @@ void test_dig() {
               "a named marker buried: the ground above is no place at the core");
         check(h.dig_worth(255, 256, GROUND_TOP),
               "the roof above a buried core: the legs are silent, the spade is worth it");
+        check(h.dig_distance(255, 256, GROUND_TOP) > 0,
+              "the spade walk keeps its own count on the roof");
+        check(h.dig_distance(256, 256, 37) == 0,
+              "the marker reads zero on the spade walk too");
         int tx = -1, ty = -1, tz = -1;
         check(h.next_dig_step(255, 256, GROUND_TOP, tx, ty, tz) &&
                   tx == 256 && ty == 256 && tz == 37,

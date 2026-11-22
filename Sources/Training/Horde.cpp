@@ -694,6 +694,17 @@ int Horde::distance(int x, int y, int z) const {
     return dist_[cell_index(x, y) * kSurfMax + k];
 }
 
+// The spade's own read of the same: the dig walk's way home from the
+// floor the feet stand on - the measure the walker following a crossing
+// the spade advised is judged by, for the legs' own field is silent on
+// the ground that crossing crosses, and a walker scored there would
+// read as standing still all the way home.
+int Horde::dig_distance(int x, int y, int z) const {
+    const int k = near_dig_state(x, y, z);
+    if (k < 0) return kUnreachable;
+    return dig_dist_[cell_index(x, y) * kSurfMax + k];
+}
+
 bool Horde::near_core(int x, int y, int cells) const {
     return std::abs(x - cfg_.core_x) <= cells && std::abs(y - cfg_.core_y) <= cells;
 }

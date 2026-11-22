@@ -135,6 +135,16 @@ constexpr float kPrintShoulder = 1.0f;
 // through still, and not crossed at the wall.
 constexpr float kPrintTouch = 0.7f;
 
+// A print owed abreast of the walker, or behind it, is the print of a
+// miss - a bend carried wide, a bank that threw the leg off the trail -
+// and paying it in full costs the line the walk back and the walk again
+// over the same ground, both printed for every heel behind to replay:
+// one miss become the whole line's zigzag. So the print is aimed at
+// only while it stands ahead of the walker by this much of the bearing
+// to the one it follows; owed at less, the walker has strayed, and it
+// is the field that leads it until the line takes it back.
+constexpr float kPrintAside = 0.5f;
+
 // The heel's own sight: a follower this close to the one it follows is
 // not stuck - it is parked. The line's heel holds its place by stirring
 // on the spot, a print owed it every half a pace, and the held heel is
@@ -1352,11 +1362,27 @@ struct Server::Impl {
             const float l = std::sqrt(adx * adx + ady * ady);
             const float leash = world_time - p.born_at < kZombieSettle ? 1.0f : 1.6f;
             const int print = ahead_print(*ahead, p.body.pos.x, p.body.pos.y);
-            if (print >= 0) {
+            // The strayed one takes the pack's head's read: a print owed
+            // behind or abreast, or nothing owed with the line's end past
+            // the ring's whole depth, means the walker is off the trail -
+            // and doubling back for the miss would engrave it into the
+            // trail for every heel behind to walk again. So it reads the
+            // field instead, the walk the whole of it shares, never the
+            // open air's own bearing, and the corridor it marches is the
+            // one the line marches: the nearest print ahead stands
+            // unmasked, and the chase resumes on its own.
+            bool strayed = print < 0 && l > leash;
+            if (print >= 0 && !strayed) {
                 const float dx = ahead->heel_x[print] - p.body.pos.x;
                 const float dy = ahead->heel_y[print] - p.body.pos.y;
                 const float dl = std::sqrt(dx * dx + dy * dy);
-                if (dl > 1e-3f) {
+                // Squared against the bearing to the one it follows: the
+                // cosine of the angle between the print's pull and the
+                // line's own pull, cheap and free of any square root the
+                // chase below has not already paid.
+                if (dl > 1e-3f &&
+                    (l <= 1e-3f ||
+                     (dx * adx + dy * ady) / (dl * l) >= kPrintAside)) {
                     p.body.ori = Vec3{dx / dl, dy / dl, 0.0f};
                     p.input.mf = true;
                     // The catch: the run that draws a strung-out follower
@@ -1364,13 +1390,55 @@ struct Server::Impl {
                     // and banks, where a run cannot take its own step.
                     p.input.sprint = l > kPackCatch &&
                                     std::fabs(ahead->body.pos.z - p.body.pos.z) < 0.5f;
+                } else {
+                    strayed = true;
                 }
-            } else if (l > leash) {
-                p.body.ori = Vec3{adx / l, ady / l, 0.0f};
-                p.input.mf = true;
-                p.input.sprint = l > kPackCatch &&
-                                 std::fabs(ahead->body.pos.z - p.body.pos.z) < 0.5f;
-            } else {
+            }
+            if (strayed) {
+                int tx = cx, ty = cy;
+                // The field read from the footing, as the head reads it -
+                // and, the same mercy, the cell's own read in the air.
+                const bool led =
+                    (!p.body.airborne && horde->next_step(cx, cy, fz, tx, ty)) ||
+                    horde->next_step(cx, cy, tx, ty);
+                if (led) {
+                    // The centre of the cell, never its corner.
+                    const float tdx = static_cast<float>(tx) + 0.5f -
+                                      p.body.pos.x;
+                    const float tdy = static_cast<float>(ty) + 0.5f -
+                                      p.body.pos.y;
+                    const float tdl = std::sqrt(tdx * tdx + tdy * tdy);
+                    if (tdl > 1e-3f) {
+                        p.body.ori = Vec3{tdx / tdl, tdy / tdl, 0.0f};
+                        p.input.mf = true;
+                        p.input.sprint = l > kPackCatch &&
+                                        std::fabs(ahead->body.pos.z - p.body.pos.z) < 0.5f;
+                    }
+                } else if (print >= 0) {
+                    // The field silent - at the core's own cell it always
+                    // is - the print is paid rather than the walker stand:
+                    // the walker stood on the walk, the trail holds it.
+                    const float dx = ahead->heel_x[print] - p.body.pos.x;
+                    const float dy = ahead->heel_y[print] - p.body.pos.y;
+                    const float dl = std::sqrt(dx * dx + dy * dy);
+                    if (dl > 1e-3f) {
+                        p.body.ori = Vec3{dx / dl, dy / dl, 0.0f};
+                        p.input.mf = true;
+                        p.input.sprint = l > kPackCatch &&
+                                        std::fabs(ahead->body.pos.z - p.body.pos.z) < 0.5f;
+                    }
+                } else if (l > leash) {
+                    // Off the ring's depth with the field silent as well:
+                    // the air line remains, a slow walk over broken ground
+                    // still beats a standstill at the line's very end.
+                    p.body.ori = Vec3{adx / l, ady / l, 0.0f};
+                    p.input.mf = true;
+                    p.input.sprint = l > kPackCatch &&
+                                    std::fabs(ahead->body.pos.z - p.body.pos.z) < 0.5f;
+                } else {
+                    p.body.ori = ahead->body.ori;
+                }
+            } else if (print < 0) {
                 p.body.ori = ahead->body.ori;
             }
         } else {

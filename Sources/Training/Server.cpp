@@ -819,21 +819,12 @@ struct Server::Impl {
         if (x != horde_cfg.core_x || y != horde_cfg.core_y) return false;
         return z >= core_top_z && z <= core_ground_z - 1;
     }
-    // The blue tent that dresses the core: only the cells it truly placed
-    // stand in this list - whatever the tent let stand (the cave's own
-    // rock, a wall run close) is everyone's to dig, not the tent's.
-    std::vector<Cell> tent_cells;
-    bool core_tent_cell(int x, int y, int z) const {
-        if (!horde_mode()) return false;
-        for (const Cell& tc : tent_cells)
-            if (tc.x == x && tc.y == y && tc.z == z) return true;
-        return false;
-    }
     // The core stands out of the ground in the colour of its team, a
     // column three blocks tall read off the real ground at its cell:
     // everything a client needs to see where to defend. The intel drawn
-    // on top of it comes from StateData, and the dig and blast vetoes
-    // below keep it standing.
+    // on top of it, and the blue tent the client draws for the base at
+    // the core's own cell, both come from StateData, and the dig and
+    // blast vetoes below keep the column standing.
     //
     // Where the foot is named, the column stands on the layer beneath it
     // instead and two blocks tall: the map's own z at the map's own cell
@@ -854,35 +845,6 @@ struct Server::Impl {
         for (int k = 1; k <= core_height; ++k)
             map.set(x, y, core_ground_z - k, 0x7F3080FFu);
         core_top_z = core_ground_z - core_height;
-        build_core_tent();
-    }
-
-    // The blue team's tent around the core, the dress it defends in: a
-    // ring at the foot of the column, posts at the corners rising to a
-    // roof over it, and an eye in that roof for the flag to climb
-    // through. Only the air the map already owns is clothed - whatever
-    // stands (the room's own rock, a wall run close) keeps its place and
-    // the tent simply wears less of it. King of the hill this is not:
-    // the tent is the core's, and the vetoes below keep it standing too.
-    void build_core_tent() {
-        tent_cells.clear();
-        const int cx = horde_cfg.core_x, cy = horde_cfg.core_y;
-        const int base = core_ground_z - 1;   // the ring, at the column's foot
-        const int roof = core_top_z - 1;      // the cover, the eye above the flag
-        for (int dx = -1; dx <= 1; ++dx)
-            for (int dy = -1; dy <= 1; ++dy) {
-                if (dx == 0 && dy == 0) continue;   // the column's own cell
-                stand_tent(cx + dx, cy + dy, base);
-                stand_tent(cx + dx, cy + dy, roof);
-                if (dx != 0 && dy != 0)
-                    for (int z = core_top_z; z <= core_ground_z - 2; ++z)
-                        stand_tent(cx + dx, cy + dy, z);
-            }
-    }
-    void stand_tent(int x, int y, int z) {
-        if (!VoxelMap::valid(x, y, z) || map.solid(x, y, z)) return;
-        map.set(x, y, z, 0x7F000000u | team_color[0]);
-        tent_cells.push_back(Cell{x, y, z});
     }
 
     // The column of the old column: whatever of it stands is taken down and
@@ -907,9 +869,6 @@ struct Server::Impl {
             const int z = core_ground_z - k;
             if (map.solid(x, y, z)) unstand(x, y, z);
         }
-        for (const Cell& tc : tent_cells)
-            if (map.solid(tc.x, tc.y, tc.z)) unstand(tc.x, tc.y, tc.z);
-        tent_cells.clear();
         touched(removed, false);
     }
     // The same, said on the wire: the blocks the column is, worn in the
@@ -925,12 +884,6 @@ struct Server::Impl {
             if (!map.solid(x, y, z)) continue;
             turret_block_built(x, y, z);
             built.push_back(Cell{x, y, z});
-        }
-        turret_colour_said(team_color[0]);
-        for (const Cell& tc : tent_cells) {
-            if (!map.solid(tc.x, tc.y, tc.z)) continue;
-            turret_block_built(tc.x, tc.y, tc.z);
-            built.push_back(tc);
         }
         touched(built, true);
     }
@@ -1047,6 +1000,16 @@ struct Server::Impl {
                     static_cast<float>(horde_cfg.core_y) + 0.5f,
                     static_cast<float>(core_top_z)};
     }
+    // The blue tent the client draws for team 0's base: the checkpoint
+    // model its own scene stands at the base's cell, one plane beneath
+    // the column's top - the bottom block of the core, whose feet share
+    // the ground it stands on. The zombies' side keeps its buried
+    // nothing: only the dress of the defence is drawn.
+    Vec3 core_base_pos() const {
+        return Vec3{static_cast<float>(horde_cfg.core_x) + 0.5f,
+                    static_cast<float>(horde_cfg.core_y) + 0.5f,
+                    static_cast<float>(core_top_z + 1)};
+    }
     Vec3 under_core() const {
         // Inside the bedrock the core stands on, where nothing sees it: the
         // rest of the mode's list, which a client would draw at its zero.
@@ -1070,7 +1033,7 @@ struct Server::Impl {
             bw.write_u8(0);                    // nobody holds an intel
             bw.write_vec(core_intel_pos());    // team 0's flag: the core
             bw.write_vec(under_core());        // team 1's flag, buried
-            bw.write_vec(under_core());        // team 0's base, buried
+            bw.write_vec(core_base_pos());    // team 0's base: the tent
             bw.write_vec(under_core());        // team 1's base, buried
         } else {
             bw.write_u8(1);
@@ -2276,8 +2239,7 @@ struct Server::Impl {
             if (p.ahead_id >= 0) return true;   // the line waits on its head
             if (world_time < p.spade_at + horde_cfg.dig_seconds) return true;
             if (!map.solid(tx, ty, tz)) return true;   // the field has not caught up yet
-            if (core_column_cell(tx, ty, tz) || core_tent_cell(tx, ty, tz))
-                return true;
+            if (core_column_cell(tx, ty, tz)) return true;
             std::vector<Cell> removed;
             map.destroy_point(tx, ty, tz, &removed);
             touched(removed, false);
@@ -3329,8 +3291,7 @@ struct Server::Impl {
         for (int nx = x - 1; nx <= x + 1; ++nx)
             for (int ny = y - 1; ny <= y + 1; ++ny)
                 for (int nz = z - 1; nz <= z + 1; ++nz) {
-                    if (core_column_cell(nx, ny, nz) || core_tent_cell(nx, ny, nz))
-                        continue;  // the core holds, and so does its tent
+                    if (core_column_cell(nx, ny, nz)) continue;  // the core holds
                     map.destroy_point(nx, ny, nz, &removed);
                 }
         touched(removed, false);
@@ -3771,10 +3732,6 @@ struct Server::Impl {
             if (!map.solid(x, y, z)) return;
             if (core_column_cell(x, y, z)) {
                 system_chat("The core cannot be torn down.", p.id);
-                return;
-            }
-            if (core_tent_cell(x, y, z)) {
-                system_chat("The core's tent cannot be torn down.", p.id);
                 return;
             }
             if (p.tool == kToolSpade && !within(kMaxDigDistance)) return;

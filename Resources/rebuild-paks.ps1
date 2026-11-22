@@ -35,7 +35,6 @@ function Fail([string]$why) {
 }
 
 $Repo = Split-Path -Parent $PSScriptRoot     # this file lives in Resources
-$Target = Join-Path $GameDir "Resources"
 
 if ($GameDir -eq "") {
     $Build = Join-Path $Repo "build"
@@ -50,6 +49,11 @@ if ($GameDir -eq "") {
     Write-Host ("   found " + $Exe.FullName)
     Write-Host ("   built " + $Exe.LastWriteTime)
 }
+
+# With the game folder known - found or given - the paks go under its
+# own Resources; said once here, after the finding, for an empty folder
+# cannot be joined to a path.
+$Target = Join-Path $GameDir "Resources"
 
 if (-not (Test-Path -LiteralPath $GameDir)) {
     Fail("The game folder does not exist: " + $GameDir)

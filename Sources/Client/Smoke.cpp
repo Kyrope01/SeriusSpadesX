@@ -324,8 +324,15 @@ namespace spades {
 					stmp::optional<IGameMode&> mode = world->GetMode();
 					if (mode && mode->ModeType() == IGameMode::m_CTF) {
 						auto& ctf = dynamic_cast<CTFGameMode&>(mode.value());
+						// The flag hops to the top of the column, and the base
+						// one plane beneath it: the tent the client draws for
+						// the base stands at the core's foot, so a mid game
+						// move takes the dress along with the flag.
 						ctf.GetTeam(0).flagPos = MakeVector3(static_cast<float>(x) + 0.5F,
 						                                     static_cast<float>(y) + 0.5F, z);
+						ctf.GetTeam(0).basePos = MakeVector3(static_cast<float>(x) + 0.5F,
+						                                      static_cast<float>(y) + 0.5F,
+						                                      z + 1.0F);
 					}
 				} break;
 				default:

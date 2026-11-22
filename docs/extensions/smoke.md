@@ -189,7 +189,10 @@ when it fired.
 The cell the server's core stands on and the plane of its column's top,
 so the flag a client draws as the core moves when the core does (the
 `/core` server command) - a move no vanilla packet can say: every one of
-them talks of a pickup, a drop or a capture that nobody made. Sent to
+them talks of a pickup, a drop or a capture that nobody made. The same
+word moves the team's base with it, one plane beneath the top it names:
+the tent a client draws for the base follows the core, so the dress it
+defends in never stays behind. Sent to
 clients that claimed version 3 on the same rhythm the guns are: at once
 when the core moved, whole again every few seconds, so a client that
 finished loading mid-game is told wherever the core stands now, whatever
@@ -201,7 +204,7 @@ its own StateData said.
 | Sub Packet ID | UByte         | `5`      | Always `5` for this sub-packet. |
 | X             | UShort        | `271`    | The core's cell. |
 | Y             | UShort        | `262`    | |
-| Z             | UByte         | `36`     | The plane of the column's top, the same cell StateData names. |
+| Z             | UByte         | `36`     | The plane of the column's top, the same cell StateData names; the base the client draws as a tent stands one plane beneath. |
 
 ## Examples
 

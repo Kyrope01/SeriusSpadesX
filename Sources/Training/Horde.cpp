@@ -1082,7 +1082,11 @@ void Horde::scout() {
     // legs cannot cross, so only the cells at the ring's own ground
     // level, the height most of its cells stand at, are candidates, never
     // one perched more than kWalkDrop above it. Ties keep the first cell
-    // the scan reads.
+    // the scan reads. A map that named its sites carries its own meaning
+    // instead: the point named a birthplace, not a centre to read a
+    // frontier from, so the sweep stops on the first cell the walk
+    // reaches at the asked layer - the point itself wherever it stands,
+    // the ground beside it wherever it does not.
     std::vector<int> rungs_x, rungs_y, rungs_g;
     // One reading of the anchors and their ranking, leg walk or dig walk
     // by the field it is handed: the dig pass asks the same questions of
@@ -1176,12 +1180,30 @@ void Horde::scout() {
                 for (size_t k = 0; k < rungs_x.size(); ++k) {
                     if (std::abs(rungs_g[k] - level) > Config::kWalkDrop) continue;
                     const int d = best_len(rungs_x[k], rungs_y[k]);
+                    // A map that named its sites named a birthplace, not
+                    // a centre to read a frontier from: the anchor is the
+                    // named ground itself - the first cell within the
+                    // sweep the walk reaches at the asked layer, the
+                    // point wherever it stands, the ground beside it
+                    // wherever it does not.
+                    if (cfg_.spawn_named) {
+                        if (d >= 0) {
+                            anchor_x_[c] = rungs_x[k];
+                            anchor_y_[c] = rungs_y[k];
+                            break;
+                        }
+                        continue;
+                    }
                     if (d > best_d) {
                         best_d = d;
                         anchor_x_[c] = rungs_x[k];
                         anchor_y_[c] = rungs_y[k];
                     }
                 }
+                // The named ground found, the sweep stops here: the
+                // unnamed corners keep reading their frontier out to the
+                // whole reach, as ever.
+                if (cfg_.spawn_named && anchor_x_[c] >= 0) break;
             }
         }
         // The ranking: each anchored corner's way in, read out loud.

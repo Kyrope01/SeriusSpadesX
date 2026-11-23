@@ -302,6 +302,71 @@ void test_stair_price() {
     }
 }
 
+void test_spawn_named() {
+    std::printf("[spawn] a named site anchors on its own ground\n");
+    // A map that named its sites: the anchor of each is the named ground
+    // itself, never again the frontier a 200-ring sweep holds out to the
+    // border of the world - the point only named the centre of the
+    // reading before, and the reading walked away from it.
+    {
+        SolidMap map;
+        plain(map);
+        horde::Config cfg = horde_cfg(256, 256);
+        cfg.spawn_named = true;
+        cfg.spawn_count = 2;
+        cfg.spawn_x[0] = 120; cfg.spawn_y[0] = 256; cfg.spawn_z[0] = 32;
+        cfg.spawn_x[1] = 240; cfg.spawn_y[1] = 100; cfg.spawn_z[1] = 32;
+        horde::Horde h(map, cfg);
+        h.scout();
+        int x = -1, y = -1;
+        check(h.corner_anchor(0, x, y) && x == 120 && y == 256,
+              "the first named site anchors on the point it named");
+        check(h.corner_anchor(1, x, y) && x == 240 && y == 100,
+              "the second named site anchors on its own ground too");
+        check(h.distance(120, 256) >= 0 && h.distance(240, 100) >= 0,
+              "both named sites stand on the walk itself");
+    }
+    // A site named inside walls the legs cannot cross: the sweep stops on
+    // the first ring that stands, the field ground just outside the
+    // sealed pocket, and never walks away out to the border of the map.
+    {
+        SolidMap map;
+        plain(map);
+        for (int x = 297; x <= 303; ++x)
+            for (int y = 297; y <= 303; ++y)
+                if (x == 297 || x == 303 || y == 297 || y == 303)
+                    for (int z = 28; z <= 31; ++z)
+                        map.set_block(x, y, z, true);
+        horde::Config cfg = horde_cfg(256, 256);
+        cfg.spawn_named = true;
+        cfg.spawn_count = 1;
+        cfg.spawn_x[0] = 300; cfg.spawn_y[0] = 300; cfg.spawn_z[0] = 32;
+        horde::Horde h(map, cfg);
+        h.scout();
+        int x = -1, y = -1;
+        check(h.corner_anchor(0, x, y),
+              "the pocketed site anchors on the walk it can stand");
+        const int gx = x > 300 ? x - 300 : 300 - x;
+        const int gy = y > 300 ? y - 300 : 300 - y;
+        check(x >= 0 && y >= 0 && h.distance(x, y) >= 0
+                  && (gx > 3 || gy > 3),
+              "its anchor stands outside the sealed pocket");
+        check(x >= 0 && y >= 0 && gx <= 4 && gy <= 4,
+              "its anchor stands on the nearest ring, not the border");
+    }
+    // The unnamed world keeps its own reading: the frontier of the
+    // corner reach - the border of the map itself on an open plain.
+    {
+        SolidMap map;
+        plain(map);
+        horde::Horde h(map, horde_cfg(256, 256));
+        h.scout();
+        int x = -1, y = -1;
+        check(h.corner_anchor(0, x, y) && x == 0 && y == 0,
+              "the unnamed corner still anchors at its frontier");
+    }
+}
+
 void test_veto() {
     std::printf("[veto] the last gap cannot close by itself\n");
     // One ring, two gaps: closing one still leaves the other.
@@ -866,6 +931,7 @@ int main() {
     test_field();
     test_vault();
     test_stair_price();
+    test_spawn_named();
     test_veto();
     test_waves();
     test_route();

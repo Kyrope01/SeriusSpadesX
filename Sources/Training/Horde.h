@@ -389,11 +389,14 @@ public:
     // host's zombie_at_core, so a walker stands ON things, not near them.
     bool near_core(int x, int y, int cells) const;
 
-    // The anchor the last wave walked in from at `corner`: the far end of
-    // the walk within kSpawnSearch rings of the corner's asked-for centre,
-    // at its own ground level, kept from the wave's placing. False when
-    // the corner's reach holds no footing (a corner with no anchor raises
-    // nothing).
+    // The anchor the last wave walked in from at `corner`: on a map that
+    // named its sites, the named ground itself - the first cell the walk
+    // reaches at the asked layer within the sweep - the point wherever it
+    // stands, the ground beside it wherever it does not; on any other map
+    // the frontier of the walk within kSpawnSearch rings of the centre
+    // its corner asked of, at its own ground level, kept from the wave
+    // and its placing. False when the corner reach holds no footing (a
+    // corner with no anchor raises nothing).
     bool corner_anchor(int corner, int& x, int& y) const;
     // The way in from a cell, read off the walk: the cells one at a time,
     // each a legal crossing downhill, until the core's doorstep, each with

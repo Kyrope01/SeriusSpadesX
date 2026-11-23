@@ -79,8 +79,8 @@ constexpr double kZombieSettle = 2.0;
 constexpr float kDeadPounce = -0.45f;
 constexpr double kPounceWindup = 1.0;    // this long stuck before the first fling
 constexpr double kPounceAgain = 1.2;     // and this long between two of them
-// Close enough under the crossing for the vault: any farther off, and
-// the rise of the pounce spends itself short of the tread it is for.
+// Close enough under the crossing for the hop: any farther off, and
+// the arc falls back before the lip of the tread is reached.
 constexpr float kVaultReach = 1.5f;
 // Half-second windows a leader may pace without reaching a lower floor of
 // the walk before the pacing itself is read as stuck. The yo-yo moves -
@@ -2792,25 +2792,22 @@ struct Server::Impl {
         }
     }
 
-    // The crossing the field prices one jump, taken as the vault it is:
-    // a plain hop rises one and a half, and the lip of two went by the
-    // stuck clock alone - a second and more at every tread, and the
-    // fling that clears it lands shoulder-first, thrown wide off a
-    // step one cell wide, down the side and all the way back. The
-    // advice tells the crossing itself now, and the walker takes the
-    // lip the moment it stands under it: the rise of the pounce alone,
-    // at its walk pace, no shoulder in it. The kick stays the stuck
-    // clock alone - a wall that owes no vault keeps the fling it is
-    // owed - and the jump key keeps out of it, for the hop of the key
-    // spends the tick writing over the lunge.
+    // The crossing the field prices one jump is taken as one jump. A
+    // plain hop with a walk behind it mounts the lip of two the way
+    // any player mounts it: risen alongside the face, the physics own
+    // climb lifts the last block and spends half the run braking on
+    // the tread - the sweep of the tall pounce, thrown from a
+    // standstill, spends the stair whole. So the walker under a
+    // crossing the advice prices holds the key at its approach and
+    // lets the physics spend it, tick after tick, the flight its own
+    // cadence: grounded again under the same crossing, it presses.
+    // The ponce stays the stuck clock alone - a wall that owes no
+    // jump lands the walker and keeps the fling it is owed.
     void vault_crossing(Player& p, int fz, int tz, float gap) {
         if (fz - tz != horde::Config::kWalkClimb) return;
         if (gap > kVaultReach) return;
         if (p.body.airborne) return;
-        if (p.body.vel.z < 0.0f || p.body.vel.z >= 0.017f) return;
-        if (world_time - p.pounce_at < kPounceAgain) return;
-        p.body.vel.z = kDeadPounce;
-        p.pounce_at = world_time;
+        p.input.jump = true;
     }
 
     // A zombie's mind: its pack walks one path - it holds at the heel of the
@@ -3079,7 +3076,7 @@ struct Server::Impl {
                     p.body.ori = Vec3{dx / l, dy / l, 0.0f};
                     p.input.mf = true;
                 }
-                // The climb the advice priced one jump is owed the vault
+                // The climb the advice priced one jump is owed the hop
                 // the moment the walker stands under it - the lip of two
                 // pressed at its face is the very stair the crossing
                 // meant, and waiting on the stuck clock for it is what

@@ -718,8 +718,8 @@ namespace spades {
 					RefreshTrainingPanel();
 				});
 				y += bh + gap * 2.0F;
-				label(_Tr("MainScreen", "Horde: waves of the walking dead, from the map's"
-								                        " corners to a core you defend"), 26.0F,
+				label(_Tr("MainScreen", "Tower Defense: waves of the walking dead,"
+								                        " marching on a core you defend"), 26.0F,
 				      MakeVector4(0.45F, 0.85F, 0.45F, 1.0F));
 				hordeButton = button(x, bw, [this] { StartHorde(); });
 				y += bh + gap;
@@ -861,7 +861,7 @@ namespace spades {
 			                             ? _Tr("MainScreen", "Highlight targets: on")
 			                             : _Tr("MainScreen", "Highlight targets: off");
 			if (hordeButton)
-				hordeButton->caption = _Tr("MainScreen", "Horde");
+				hordeButton->caption = _Tr("MainScreen", "Tower Defense");
 		}
 
 		void MainScreenMainMenu::StartAimScenario(int scenario) {

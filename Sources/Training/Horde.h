@@ -119,8 +119,21 @@ struct Config {
     int core_hp = 150;
     // How much of the core's health a cleared wave mends back.
     int core_mend = 25;
-    // How long after an edit the field is recomputed.
-    double field_period = 0.5;
+    // The safety net: a wave that neither falls nor wins - a pack lost
+    // where no licence sees it, a head wedged in a pocket the fields
+    // price kindly - would hold the game hostage for as long as it
+    // shuffles. Every wave carries a generous clock of its own, and
+    // the rare one that stands past it is taken whole, as the wave
+    // word takes it; the next stands up in the quiet after, the count
+    // unchanged. Zero leaves the net off.
+    double wave_safety_seconds = 240.0;
+    // How long after an edit the field is recomputed. Two seconds: the
+    // reads the licences ask of the field stand still as long as the
+    // dig ratio is owed its own two seconds of a road, so a ground
+    // that changes under a pack does not flip a licence that has just
+    // drawn one - while a breach the pack itself opens is still read
+    // before the errand can be asked again.
+    double field_period = 2.0;
     // How big a wave is: the waves open fronts as they number. A wave
     // takes one spawn point more than the one before it, as many of the
     // ranked order as the terrain holds, until the points reach their
@@ -239,6 +252,12 @@ public:
     int wave() const { return wave_; }
     // Seconds until the current phase ends; -1 when it is not a countdown.
     double phase_left(double now) const;
+    // Whether the running wave has outlived its own clock (see
+    // Config::wave_safety_seconds): latched once it fires, the host
+    // reads it a tick and clears the wave as the wave word does. The
+    // next birth loads the net again.
+    bool safety_net_fired() const { return net_fired_; }
+
     // Zombies of this wave that are walking or waiting, as the brain counts
     // them: raised by every spawn taken, lowered by every kill the host
     // reports.
@@ -455,6 +474,11 @@ private:
     // was last recomputed: false once the field moved, scouted again by
     // the next tick's waiting phase or the next wave's placing.
     bool scouted_ = false;
+    // The safety net clock: the moment the running wave outlives,
+    // -1 while none runs and while the net is off. net_fired_ latches
+    // the take - one clear a stalled wave, reloaded at the next birth.
+    double wave_deadline_at_ = -1.0;
+    bool net_fired_ = false;
     // Where the wave last walked in from, one anchor a spawn point (-1
     // for none): the route the host paints is traced from here.
     int anchor_x_[Config::kSpawnSites] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};

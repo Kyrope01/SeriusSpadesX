@@ -96,7 +96,7 @@ constexpr int kZombieYoyoWindows = 6;
 // licence anyway: the gate opens, and the crossing the spade's field
 // names is opened in turn, wall or ceiling, top down at the dig's own
 // pace.
-constexpr double kStuckDigWindup = 3.0;
+constexpr double kStuckDigWindup = 2.0;
 // The milling licence: a pack pinned far from the stairs shuffles a
 // little every window of its watch, and a shuffler never stands still
 // long enough for the stuck windows to catch it - the moved-window
@@ -3501,6 +3501,14 @@ struct Server::Impl {
     // The wave's announcements, its spawns, and its dead slots given back.
     void horde_tick() {
         horde->tick(world_time);
+        // The safety net: the rare wave that neither falls nor wins
+        // would hold the game hostage - once the clock the wave was
+        // born holding runs out, the net takes it here, and the clear
+        // speaks for the rest.
+        if (horde->safety_net_fired()) {
+            system_chat("The safety net takes the wave: it stood too long.");
+            clear_wave();
+        }
         const horde::Phase ph = horde->phase();
         if (ph != horde_told) {
             horde_told = ph;

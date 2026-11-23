@@ -1228,6 +1228,11 @@ void Horde::place_wave(double now) {
 void Horde::begin_wave(double now) {
     wave_ += 1;
     phase_ = Phase::Wave;
+    // The net loads at birth: one generous clock the wave may not
+    // outlive, none at all when the net is off.
+    net_fired_ = false;
+    wave_deadline_at_ = cfg_.wave_safety_seconds > 0.0
+                            ? now + cfg_.wave_safety_seconds : -1.0;
     place_wave(now);
 }
 
@@ -1259,6 +1264,10 @@ void Horde::clear_wave(double now) {
     pending_.clear();
     up_ = 0;
     core_hp_ = cfg_.core_hp;
+    // The net is spent with the wave it held: whether the host took
+    // the wave by the hand or the word, the next birth reloads it.
+    net_fired_ = false;
+    wave_deadline_at_ = -1.0;
     if (phase_ == Phase::Defeat) {
         phase_ = Phase::Intermission;
         phase_until_ = now + cfg_.intermission_seconds;
@@ -1271,6 +1280,8 @@ void Horde::restart(double now) {
     up_ = 0;
     core_hp_ = cfg_.core_hp;
     pending_.clear();
+    net_fired_ = false;
+    wave_deadline_at_ = -1.0;
     phase_until_ = now + cfg_.prep_seconds;
     recompute();
 }
@@ -1292,6 +1303,13 @@ void Horde::tick(double now) {
             if (now >= phase_until_) begin_wave(now);
             break;
         case Phase::Wave:
+            if (wave_deadline_at_ >= 0.0 && !net_fired_ &&
+                now >= wave_deadline_at_) {
+                // Once the clock runs out the latch holds: the host
+                // clears the wave, and only the next birth loads the
+                // net again - a clear, one wave, one take.
+                net_fired_ = true;
+            }
             if (wave_cleared()) {
                 // 0 asks the impossible: no wave is the last, whatever
                 // clears another follows - the debugging season's own

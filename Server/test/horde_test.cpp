@@ -541,15 +541,17 @@ void test_route() {
 // raises and traces its waves on it.
 void test_dig() {
     std::printf("[dig] the spade's walk, priced for the pinned\n");
-    // The open plain: the legs walk it free, and a walk priced only
-    // where the legs fail is never priced at all.
+    // The open plain: the legs walk it free, and the spade prices it at
+    // the legs' own rate - a field with no crossing to save saves
+    // nothing, and a shortcut logic on open ground would see ghosts.
     {
         SolidMap map;
         plain(map);
         horde::Horde h(map, horde_cfg(256, 256));
         check(h.distance(210, 210) >= 0, "the plain's walk runs free");
-        check(h.dig_distance(210, 210, GROUND_TOP) < 0,
-              "no gain on the plain: the spade walk is never priced");
+        check(h.dig_distance(210, 210, GROUND_TOP) ==
+                  h.distance(210, 210, GROUND_TOP),
+              "no gain on the plain: the spade walk prices it the same");
     }
     // The sealed ring: the legs are shut out, the spade's way crosses its
     // wall, the wave still stands up, and the advice at the wall's foot
@@ -591,8 +593,8 @@ void test_dig() {
         horde::Config off_cfg = horde_cfg(256, 256);
         off_cfg.dig = false;
         horde::Horde off(map, off_cfg);
-        check(off.dig_distance(270, 256, GROUND_TOP) < 0,
-              "the licence off: the spade walk is never priced");
+        check(off.dig_distance(270, 256, GROUND_TOP) >= 0,
+              "the licence off: the counsel stands, the hand is stayed");
         off.restart(0.0);
         off.tick(10.5);
         check(off.phase() == horde::Phase::Wave && off.placed() == 0,

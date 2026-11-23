@@ -2290,7 +2290,8 @@ struct Server::Impl {
     }
 
     // The spade's lead: the dig walk's advice, for a walker the legs'
-    // advice has nothing for - `leg_led` says which question this is.
+    // walk has no honest word for - `leg_led` is that word, read at the
+    // feet by the caller: a straight-line walking aid is not a word.
     // The crossing the dig walk hands back may be a step the legs make
     // after all, a drop walked straight off (the
     // dead fear no landing), or a climb beyond the jump: and a climb is
@@ -2854,11 +2855,22 @@ struct Server::Impl {
             const bool led =
                 (!p.body.airborne && horde->next_step(cx, cy, fz, tx, ty)) ||
                 horde->next_step(cx, cy, tx, ty);
+            // The honest word of the walk, read at the feet: ground the
+            // legs reach has a word, ground they never joined has none.
+            // The straight-line fallback inside the advice above is a
+            // walking aid for a broken field, not a word of the walk - a
+            // leader pressed to a town wall from a moat its feet are
+            // stuck in paces on ground the walk is silent on, and a
+            // licence gate fed the fallback would keep the spade from
+            // the one walker it exists for. The advice still steers the
+            // legs; only the licence is told the truth.
+            const bool on_legs =
+                !p.body.airborne && horde->distance(cx, cy, fz) >= 0;
             // The spade's second opinion, taken on the licences of the
             // pinned: the stuck clock run out, the watch run down - and
             // where the dig walk says climb, the head digs and the line
             // waits.
-            const bool digs = dig_lead(p, led);
+            const bool digs = dig_lead(p, on_legs);
             if (led && !digs) {
                 // The cell handed back is a square the legs are steered into,
                 // so it is its CENTRE they make for - never its corner. A

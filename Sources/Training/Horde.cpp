@@ -551,6 +551,13 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
 // height. The scan the surfaces cache got is not asked for here: a floor
 // with a distance was joined through it, so its z is already in the
 // book - which is what lets this read stay const.
+// The read stays ANCHORED on the ground underfoot: a floor reached
+// through solid rock - the room sealed under a hill, the storey under
+// a deck the walk crosses - is a floor the body is not standing on, and
+// a distance borrowed from it paces a walker at a wall the whole map
+// long, licensed by nothing. No floor further from the asking height
+// than a crossing the legs make is asked: the honest silence, -1, is
+// the word the stuck licence is granted by.
 int Horde::near_state(int x, int y, int z) const {
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return kUnreachable;
     const size_t i = cell_index(x, y);
@@ -559,6 +566,7 @@ int Horde::near_state(int x, int y, int z) const {
     for (int k = 0; k < kSurfMax; ++k) {
         if (d[k] == kUnreachable) continue;
         const int dz = std::abs(static_cast<int>(surf_z_[i * kSurfMax + k]) - z);
+        if (dz > Config::kWalkClimb) continue;   // anchored underfoot
         if (bk < 0 || dz < bdz || (dz == bdz && d[k] < d[bk])) {
             bk = k;
             bdz = dz;

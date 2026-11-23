@@ -354,8 +354,15 @@ public:
     // handed back is one the legs can make without letting go of the
     // ground. False on the same terms as the two-argument read; the host
     // falls back to that one when the feet are in the air or on a floor
-    // the walk has no opinion about.
-    bool next_step(int x, int y, int z, int& tx, int& ty);
+    // the walk has no opinion about. The surface the crossing runs onto
+    // is handed back in tz as well: the floor the advice is priced
+    // against, footing against footing - and the stair the field prices
+    // one jump says so in it, for a tread two above the feet is a climb
+    // owed its own vault, not a standstill at a face left to the fling.
+    // The straight line the broken field walks and the core cell both
+    // keep tz at what the caller reached in with: no word of the walk,
+    // no price, no vault.
+    bool next_step(int x, int y, int z, int& tx, int& ty, int& tz);
     // The spade's advice: the same downhill read taken on the dig walk's
     // own field, the one that crosses what the legs refuse - a fall may
     // pour and a climb may be spaded through, both priced the dig's own

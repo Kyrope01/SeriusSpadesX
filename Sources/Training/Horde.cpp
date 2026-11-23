@@ -591,7 +591,10 @@ int Horde::near_state(int x, int y, int z) const {
 // less than the tunnel's bargain and still be the true way. False on the
 // same terms as the two-argument read, which the host falls back to when
 // the feet are in the air or on a floor the walk has no opinion about.
-bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty) {
+// The floor the chosen crossing runs onto rides along in tz, so the
+// host knows the climb the advice is asking for; the straight line and
+// the core cell say nothing by it, and leave tz as they found it.
+bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty, int& tz) {
     if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
     if (surf_count(x, y) <= 0) return false;  // nowhere to stand
     const int rk = near_state(x, y, zfoot);
@@ -600,7 +603,7 @@ bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty) {
     const int z = surface(x, y, rk < 0 ? 0 : rk);
     static const int kDx[4] = {1, -1, 0, 0};
     static const int kDy[4] = {0, 0, 1, -1};
-    int best = -1, bx = -1, by = -1;
+    int best = -1, bx = -1, by = -1, bz = z;
     for (int k = 0; k < 4; ++k) {
         const int nx = x + kDx[k], ny = y + kDy[k];
         if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
@@ -618,6 +621,7 @@ bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty) {
                 best = nd;
                 bx = nx;
                 by = ny;
+                bz = surface(nx, ny, m);
             }
         }
     }
@@ -625,7 +629,8 @@ bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty) {
     if (here == 0) return false;
     // Off the field, or holding a floor nothing near is cheaper than:
     // head straight for the core, terrain permitting - a slow walk
-    // around a broken field, not a standstill.
+    // around a broken field, not a standstill. The aid prices nothing
+    // as a climb, and says as much by leaving tz alone.
     if (bx < 0) {
         const int cx = cfg_.core_x, cy = cfg_.core_y;
         if (x == cx && y == cy) return false;
@@ -650,6 +655,7 @@ bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty) {
     }
     tx = bx;
     ty = by;
+    tz = bz;
     return true;
 }
 

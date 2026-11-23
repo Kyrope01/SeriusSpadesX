@@ -79,6 +79,9 @@ constexpr double kZombieSettle = 2.0;
 constexpr float kDeadPounce = -0.45f;
 constexpr double kPounceWindup = 1.0;    // this long stuck before the first fling
 constexpr double kPounceAgain = 1.2;     // and this long between two of them
+// Close enough under the crossing for the vault: any farther off, and
+// the rise of the pounce spends itself short of the tread it is for.
+constexpr float kVaultReach = 1.5f;
 // Half-second windows a leader may pace without reaching a lower floor of
 // the walk before the pacing itself is read as stuck. The yo-yo moves -
 // a half-second's worth in every window - so the moved measure never
@@ -2789,6 +2792,27 @@ struct Server::Impl {
         }
     }
 
+    // The crossing the field prices one jump, taken as the vault it is:
+    // a plain hop rises one and a half, and the lip of two went by the
+    // stuck clock alone - a second and more at every tread, and the
+    // fling that clears it lands shoulder-first, thrown wide off a
+    // step one cell wide, down the side and all the way back. The
+    // advice tells the crossing itself now, and the walker takes the
+    // lip the moment it stands under it: the rise of the pounce alone,
+    // at its walk pace, no shoulder in it. The kick stays the stuck
+    // clock alone - a wall that owes no vault keeps the fling it is
+    // owed - and the jump key keeps out of it, for the hop of the key
+    // spends the tick writing over the lunge.
+    void vault_crossing(Player& p, int fz, int tz, float gap) {
+        if (fz - tz != horde::Config::kWalkClimb) return;
+        if (gap > kVaultReach) return;
+        if (p.body.airborne) return;
+        if (p.body.vel.z < 0.0f || p.body.vel.z >= 0.017f) return;
+        if (world_time - p.pounce_at < kPounceAgain) return;
+        p.body.vel.z = kDeadPounce;
+        p.pounce_at = world_time;
+    }
+
     // A zombie's mind: its pack walks one path - it holds at the heel of the
     // zombie in front, and the one at the head reads the field, towards the
     // core. The field is the walk without the spade - stairs, ramps and
@@ -2921,6 +2945,24 @@ struct Server::Impl {
                      (dx * adx + dy * ady) / (dl * l) >= kPrintAside)) {
                     p.body.ori = Vec3{dx / dl, dy / dl, 0.0f};
                     p.input.mf = true;
+                    // The caught line climbs the treads of its own trail
+                    // as well: the print says which way, the field says
+                    // what the crossing there costs, and a tread priced
+                    // one jump on the way the print itself pulls gets
+                    // the vault ahead of the stuck clock. A face the
+                    // trail never climbs keeps its old answer.
+                    int gx = cx, gy = cy, gz = fz;
+                    if (!p.body.airborne &&
+                        horde->next_step(cx, cy, fz, gx, gy, gz)) {
+                        const float ex = static_cast<float>(gx) + 0.5f -
+                                        p.body.pos.x;
+                        const float ey = static_cast<float>(gy) + 0.5f -
+                                        p.body.pos.y;
+                        const float el = std::sqrt(ex * ex + ey * ey);
+                        if (el > 1e-3f &&
+                            (ex * dx + ey * dy) / (el * dl) >= kPrintAside)
+                            vault_crossing(p, fz, gz, el);
+                    }
                     // The catch: the run that draws a strung-out follower
                     // back onto its leader's heels - kept off the stairs
                     // and banks, where a run cannot take its own step.
@@ -2931,12 +2973,16 @@ struct Server::Impl {
                 }
             }
             if (strayed) {
-                int tx = cx, ty = cy;
+                int tx = cx, ty = cy, tz = fz;
                 // The field read from the footing, as the head reads it -
                 // and, the same mercy, the cell's own read in the air.
+                // The read at the feet keeps the surface the crossing it
+                // names, and the climb the errand may ask on the way.
+                const bool from_footing =
+                    !p.body.airborne &&
+                    horde->next_step(cx, cy, fz, tx, ty, tz);
                 const bool led =
-                    (!p.body.airborne && horde->next_step(cx, cy, fz, tx, ty)) ||
-                    horde->next_step(cx, cy, tx, ty);
+                    from_footing || horde->next_step(cx, cy, tx, ty);
                 if (led) {
                     // The centre of the cell, never its corner.
                     const float tdx = static_cast<float>(tx) + 0.5f -
@@ -2950,6 +2996,8 @@ struct Server::Impl {
                         p.input.sprint = l > kPackCatch &&
                                         std::fabs(ahead->body.pos.z - p.body.pos.z) < 0.5f;
                     }
+                    if (from_footing)
+                        vault_crossing(p, fz, tz, tdl);
                 } else if (dig_lead(p, false)) {
                     // The field had nothing and the spade's walk had a
                     // way: the strayed one walks it - and where it
@@ -2987,13 +3035,16 @@ struct Server::Impl {
             // Nobody to follow: it is the pack's leader now, and the field
             // leads it - around the cliffs, when it can.
             p.ahead_id = -1;
-            int tx = cx, ty = cy;
+            int tx = cx, ty = cy, tz = fz;
             // The field read from the footing - and when the feet are in
             // the air, or on a floor the walk has no opinion about, the
             // cell's own read instead, the one it has always had.
+            // The read at the feet keeps the surface the crossing runs onto,
+            // and with it the climb the advice is asking for.
+            const bool from_footing =
+                !p.body.airborne && horde->next_step(cx, cy, fz, tx, ty, tz);
             const bool led =
-                (!p.body.airborne && horde->next_step(cx, cy, fz, tx, ty)) ||
-                horde->next_step(cx, cy, tx, ty);
+                from_footing || horde->next_step(cx, cy, tx, ty);
             // The honest word of the walk, read at the feet: ground the
             // legs reach has a word, ground they never joined has none.
             // The straight-line fallback inside the advice above is a
@@ -3028,6 +3079,13 @@ struct Server::Impl {
                     p.body.ori = Vec3{dx / l, dy / l, 0.0f};
                     p.input.mf = true;
                 }
+                // The climb the advice priced one jump is owed the vault
+                // the moment the walker stands under it - the lip of two
+                // pressed at its face is the very stair the crossing
+                // meant, and waiting on the stuck clock for it is what
+                // filled the stairs with the milling crowd.
+                if (from_footing)
+                    vault_crossing(p, fz, tz, l);
             }
         }
         // The shuffle apart, folded into the facing: a walker veers a step

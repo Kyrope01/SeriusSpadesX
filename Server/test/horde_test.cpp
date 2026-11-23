@@ -181,6 +181,57 @@ void test_field() {
     }
 }
 
+// v178ap: the advice tells the crossing itself: the two-block tread the
+// field prices one jump is handed back with the surface it runs onto,
+// so the walker under it takes the lip the moment it arrives. The lane
+// the walls shut faces its stair, the fall stays walked straight off,
+// the pile of three keeps the walk it has always been, and the silence
+// of the pit and of the core leaves tz as it came in.
+void test_vault() {
+    std::printf("[vault] the crossing surface is handed back\n");
+    SolidMap map;
+    plain(map);
+    // A lane shut by three-high walls both sides, and a stair of two
+    // at its head: the climb is the only way out, and the advice has
+    // no cheaper neighbour to name instead.
+    for (int i = 195; i <= 200; ++i) {
+        map.set_block(i, 255, 31, true);
+        map.set_block(i, 255, 30, true);
+        map.set_block(i, 255, 29, true);
+        map.set_block(i, 257, 31, true);
+        map.set_block(i, 257, 30, true);
+        map.set_block(i, 257, 29, true);
+    }
+    map.set_block(200, 256, 31, true);
+    map.set_block(200, 256, 30, true);
+    // A pile of three off the road: what a jump never clears. And a pit
+    // four deep: ground the walk owes no opinion on, the fallback alone.
+    map.set_block(100, 100, 31, true);
+    map.set_block(100, 100, 30, true);
+    map.set_block(100, 100, 29, true);
+    map.set_block(220, 220, 33, false);
+    map.set_block(220, 220, 32, false);
+    map.set_block(220, 220, 37, true);
+    map.set_block(220, 220, 36, true);
+    horde::Horde h(map, horde_cfg(256, 256));
+    int tx = -1, ty = -1, tz = 999;
+    check(h.next_step(199, 256, 32, tx, ty, tz) && tx == 200 && ty == 256,
+          "from the shut lane the stair tread is the advice");
+    check(tz == 30, "the tread handed back is two above the feet");
+    check(32 - tz == horde::Config::kWalkClimb,
+          "the climb is priced the one jump the legs owe");
+    check(h.next_step(200, 256, 30, tx, ty, tz) && tz == 32,
+          "off the tread the crossing is a fall, not a climb");
+    check(h.distance(100, 100, 29) < 0,
+          "the top of a pile of three is no floor of the walk");
+    tz = 12345;
+    check(h.next_step(220, 220, 36, tx, ty, tz) && tz == 12345,
+          "the fallback of the pit prices no climb, and keeps tz as it was");
+    tz = 54321;
+    check(!h.next_step(256, 256, 32, tx, ty, tz) && tz == 54321,
+          "at the core no step helps, and tz keeps what it came in with");
+}
+
 void test_veto() {
     std::printf("[veto] the last gap cannot close by itself\n");
     // One ring, two gaps: closing one still leaves the other.
@@ -743,6 +794,7 @@ void test_roam() {
 
 int main() {
     test_field();
+    test_vault();
     test_veto();
     test_waves();
     test_route();

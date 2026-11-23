@@ -59,6 +59,9 @@ enum class PacketId : uint8_t {
     // Teamplay extension (48, below) owns 112. Only ever sent to a connection
     // that claimed the extension; see read_teamplay_ping().
     Teamplay          = 112,
+    // Pie Menu (extension 0x31): the quick menu served whole, server to
+    // client. Only ever sent to a connection that claimed the extension.
+    PieMenu           = 113,
     // Flashlight (extension 0x32): who has a lit lamp. See the section below.
     Flashlight        = 114,
     // Daytime and Weather (extension 0x33): the time of day, server to client.
@@ -158,6 +161,9 @@ enum class ChatType : uint8_t {
 enum class Extension : uint8_t {
     // Pings between teammates, relayed by the server.
     Teamplay = 48,
+    // The pie menu a server serves whole: its rings and their slices, said
+    // on the wire for the middle button wheel to open on.
+    PieMenu = 0x31,
     // Lamps everybody sees.
     Flashlight = 0x32,
     // The time of day: a client that claimed it draws a night at midnight.

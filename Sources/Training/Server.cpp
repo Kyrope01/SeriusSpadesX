@@ -503,6 +503,7 @@ struct Player {
     bool ext_smoke = false;       // claimed Smoke (0x3F), version whatever
     bool ext_trail = false;       // claimed Smoke v2: the ways in as paths, not beds
     bool ext_turrets = false;     // claimed Smoke v3: the sentry guns, drawn over their blocks
+    bool ext_piemenu = false;    // claimed Pie Menu (0x31): the wheel served whole
     // The walk and jump flags the zombies' clients were last told, and the
     // bite whose swing packet has yet to be closed. Real players tell the
     // clients these things themselves; the horde is told for them.
@@ -3919,10 +3920,18 @@ struct Server::Impl {
                 // the smoke at its third version, whose paths draw a way in
                 // whole and whose sentry guns are said over their own blocks,
                 // so a client that knows them is sent neither vapour it does
-                // not need nor a pillar without its works.
+                // not need nor a pillar without its works. A horde world adds
+                // the pie menu on top: the wheel the middle button opens is
+                // served whole, its Defence page first, and a client that
+                // claimed it drops the rings it ships with for the server
+                // word. Anywhere else the wheel keeps its own.
                 ByteWriter bw;
                 bw.write_u8(static_cast<uint8_t>(PacketId::ExtensionInfo));
-                bw.write_u8(7);
+                bw.write_u8(horde_mode() ? 8 : 7);
+                if (horde_mode()) {
+                    bw.write_u8(static_cast<uint8_t>(proto::Extension::PieMenu));
+                    bw.write_u8(1);
+                }
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::ChatType));
                 bw.write_u8(1);
                 bw.write_u8(static_cast<uint8_t>(proto::Extension::Teamplay));
@@ -4005,6 +4014,13 @@ struct Server::Impl {
                     if (p.loading) p.saved.push_back(guns.data);
                     else send(p, guns);
                 }
+                // The pie menu: the wheel is the server word now, so it is
+                // owed at once - held with the state for a client still
+                // loading the map - rings and slices whole, for a client
+                // that claimed it opens the server wheel or none at all.
+                p.ext_piemenu = horde_mode() &&
+                                m.offers(proto::Extension::PieMenu);
+                if (p.ext_piemenu) send_pie_menu(p);
             } break;
             case PacketId::Flashlight: on_flashlight(p, br); break;
             case PacketId::Teamplay: on_teamplay(p, br); break;
@@ -4355,6 +4371,262 @@ struct Server::Impl {
         broadcast(bw, true);
     }
 
+    // --- the pie menu (extension 0x31): the wheel, served whole ----------
+    //
+    // The middle button opens a wheel of rings, and a menu a server sends
+    // replaces the client built-in rings entirely, ring for ring - so the
+    // Defence ring is served first, the page the wheel opens on wherever it
+    // is opened, and behind it the built-in rings are said again, their
+    // words and their marks, that nothing the wheel always offered is lost
+    // to the server word. A ring is six slices whatever fills them: the
+    // empty ones draw nothing and cannot be chosen. A slice is a chat line
+    // the client speaks as the player picks it, on team chat or the whole
+    // server by its flag: the turret words and the wave word land in the
+    // command own hands, the mark words carry the aimed place as their
+    // first numbers, and the rest are chat as they always were. The context
+    // bits are what the crosshair is on when the wheel opens, as the client
+    // numbers them.
+    static constexpr uint8_t kPieBlock = 1 << 0;
+    static constexpr uint8_t kPieTeammate = 1 << 1;
+    static constexpr uint8_t kPieEnemy = 1 << 2;
+    static constexpr uint8_t kPieSpectator = 1 << 3;
+    static constexpr uint8_t kPieDead = 1 << 4;
+    static constexpr uint8_t kPieSky = 1 << 5;
+    static constexpr uint8_t kPieWorld = kPieBlock | kPieSky;
+    static constexpr uint8_t kPiePlayer = kPieTeammate | kPieEnemy;
+
+    struct PieSliceDef {
+        const char* text;
+        const char* label;
+        const char* tooltip;
+        bool global;
+    };
+    struct PieRingDef {
+        uint8_t contexts;
+        const char* theme;
+        PieSliceDef slices[6];
+    };
+
+    // The served whole. The Defence ring stands in every context, dead and
+    // spectating with the rest, for the wave word is owed wherever a
+    // defender stands. The built-in rings behind it keep the order the
+    // client ships them: the pointing ring that marks the aimed place with
+    // a ping the server takes, the words said to no-one in particular, the
+    // warnings and the asking said to the player under the crosshair
+    // alone, the taunt said to the whole server, and the pointing ring
+    // again wherever a player is the ground aimed at.
+    static const std::vector<PieRingDef>& pie_rings() {
+        static const std::vector<PieRingDef> rings = {
+          {kPieBlock | kPieTeammate | kPieEnemy | kPieSpectator | kPieDead |
+               kPieSky,
+           "Defence",
+           {{"/turret1", "Turret 1",
+             "a sentry of the first make, where you stand", false},
+            {"/turret2", "Turret 2",
+             "a sentry of the second make, where you stand", false},
+            {"/turret3", "Turret 3",
+             "a sentry of the third make, where you stand", false},
+            {"/turretremove", "Take down",
+             "your own sentries, taken down", false},
+            {"/clearwave", "Clear wave",
+             "the standing wave, called off", false},
+            {"", "", "", false}}},
+          {kPieBlock,
+           "Point",
+           {{"/pingmark %h Enemy Here!", "Enemy Here!", "", false},
+            {"/pingmark %h Tear It Down!", "Tear It Down!", "", false},
+            {"/pingmark %h Watch This Spot", "Watch This Spot", "", false},
+            {"/pingmark %h Go Here!", "Go Here!", "", false},
+            {"/pingmark %h Let's Dig Here", "Let's Dig Here", "", false},
+            {"/pingmark %h Help Me Build", "Help Me Build", "", false}}},
+          {kPieWorld | kPieDead,
+           "Social",
+           {{"Affirmative", "", "", false},
+            {"Thank You", "", "", false},
+            {"Hi!", "", "", false},
+            {"Negative", "", "", false},
+            {"Sorry!", "", "", false},
+            {"Help Me", "", "", false}}},
+          {kPieWorld | kPieDead,
+           "Tactics",
+           {{"Attack!", "", "", false},
+            {"Get the Intel!", "", "", false},
+            {"Enemy Has the Intel!", "", "", false},
+            {"Fall Back!", "", "", false},
+            {"Regroup on Me", "", "", false},
+            {"Defend the Intel!", "", "", false}}},
+          {kPieTeammate,
+           "Warn",
+           {{"/pm %p Above You!", "Above You!", "", false},
+            {"/pm %p On Your Right!", "On Your Right!", "", false},
+            {"/pm %p Behind You!", "Behind You!", "", false},
+            {"/pm %p Below You!", "Below You!", "", false},
+            {"/pm %p Sniper on You!", "Sniper on You!", "", false},
+            {"/pm %p On Your Left!", "On Your Left!", "", false}}},
+          {kPieTeammate,
+           "Social",
+           {{"/pm %p Affirmative", "Affirmative", "", false},
+            {"/pm %p Thank You", "Thank You", "", false},
+            {"/pm %p Hi!", "Hi!", "", false},
+            {"/pm %p Negative", "Negative", "", false},
+            {"/pm %p Sorry!", "Sorry!", "", false},
+            {"/pm %p Help Me", "Help Me", "", false}}},
+          {kPieTeammate,
+           "Cooperate",
+           {{"/pm %p Follow Me", "Follow Me", "", false},
+            {"/pm %p Cover Me", "Cover Me", "", false},
+            {"/pm %p Let Me Through", "Let Me Through", "", false},
+            {"/pm %p Stay Here", "Stay Here", "", false},
+            {"/pm %p Boost Me Up", "Boost Me Up", "", false},
+            {"/pm %p Help Me Build", "Help Me Build", "", false}}},
+          {kPieEnemy,
+           "Taunt",
+           {{"I See You", "", "", true},
+            {"Nice Try", "", "", true},
+            {"Miss Me?", "", "", true},
+            {"Too Easy", "", "", true},
+            {"Behind You...", "", "", true},
+            {"Say Goodbye", "", "", true}}},
+          {kPiePlayer,
+           "Point",
+           {{"/pingmark %h Enemy Here!", "Enemy Here!", "", false},
+            {"/pingmark %h Tear It Down!", "Tear It Down!", "", false},
+            {"/pingmark %h Watch This Spot", "Watch This Spot", "", false},
+            {"/pingmark %h Go Here!", "Go Here!", "", false},
+            {"/pingmark %h Let's Dig Here", "Let's Dig Here", "", false},
+            {"/pingmark %h Help Me Build", "Help Me Build", "", false}}},
+        };
+        return rings;
+    }
+
+    // One string of the menu wire: a 0xFF the client takes for what follows
+    // is UTF-8, the bytes, and the NUL that ends them. Every text the menu
+    // serves is plain ASCII, which is UTF-8 as it stands.
+    static void pie_string(ByteWriter& bw, const char* s) {
+        bw.write_u8(0xFF);
+        bw.write_cstring(s);
+    }
+
+    // The whole menu on the wire, sub 0 of the pie packet, held with the
+    // state for a client still loading the map: served whole or refused
+    // whole, and a byte too many at the end leaves the client the rings it
+    // ships with.
+    void send_pie_menu(Player& p) {
+        const auto& rings = pie_rings();
+        ByteWriter bw;
+        bw.write_u8(static_cast<uint8_t>(PacketId::PieMenu));
+        bw.write_u8(0);               // the Menu sub packet
+        bw.write_u8(static_cast<uint8_t>(rings.size()));
+        for (const PieRingDef& ring : rings) {
+            bw.write_u8(ring.contexts);
+            bw.write_u8(0);           // the theme own message id: none
+            pie_string(bw, ring.theme);
+            for (const PieSliceDef& s : ring.slices) {
+                bw.write_u8(0);       // the slice own message id: none
+                bw.write_u8(s.global ? 1 : 0);
+                pie_string(bw, s.text);
+                pie_string(bw, s.label);
+                pie_string(bw, s.tooltip);
+            }
+        }
+        if (p.loading) p.saved.push_back(bw.data);
+        else send(p, bw);
+    }
+
+    // The pointing slices land as this: the aimed place in three numbers
+    // the client filled in for the %h of its own, then the words. The word
+    // is parsed back into a ping, in the colour of the team that said it,
+    // in the world and on the minimap alike, at the pace the ping button
+    // keeps: kPingInterval between the marks, whatever said them.
+    void ping_mark_command(Player& p, const std::string& text) {
+        if (!p.alive || !p.playing()) return;
+        if (world_time - p.last_ping < kPingInterval) return;
+        std::vector<double> ns;
+        // The word is kept as it was said, case and all: the numbers parse
+        // the same whatever their case, and the words of the reason are
+        // the words the wheel drew.
+        const std::string cut = trimmed(text.substr(9));
+        size_t from = 0;
+        for (;;) {
+            const size_t sp = cut.find(' ', from);
+            const std::string one = sp == std::string::npos
+                                        ? cut.substr(from)
+                                        : cut.substr(from, sp - from);
+            if (!one.empty()) ns.push_back(std::strtod(one.c_str(), nullptr));
+            if (ns.size() == 3) break;
+            if (sp == std::string::npos) break;
+            from = sp + 1;
+        }
+        std::string reason = "";
+        if (ns.size() == 3) {
+            const size_t sp = cut.find(' ', from);
+            reason = sp == std::string::npos ? "" : cut.substr(sp + 1);
+        }
+        const bool bad = ns.size() < 3 || std::isnan(ns[0]) ||
+                          std::isnan(ns[1]) || std::isnan(ns[2]);
+        if (bad || ns[0] < 0.0 || ns[0] > 512.0 || ns[1] < 0.0 ||
+            ns[1] > 512.0 || ns[2] < 0.0 || ns[2] > 64.0) {
+            system_chat("usage: /pingmark x y z <what to say>", p.id);
+            return;
+        }
+        p.last_ping = world_time;
+        if (reason.size() > proto::kTeamplayReasonMax)
+            reason.resize(proto::kTeamplayReasonMax);
+        ByteWriter bw;
+        bw.write_u8(static_cast<uint8_t>(PacketId::Teamplay));
+        bw.write_u8(1);               // Ping
+        bw.write_u8(static_cast<uint8_t>(p.id));
+        bw.write_vec(Vec3{static_cast<float>(ns[0]), static_cast<float>(ns[1]),
+                          static_cast<float>(ns[2])});
+        bw.write_f32(kPingDuration);
+        bw.write_u8(1 | 2);           // in the world and on the minimap
+        write_color(bw, p.team == 0 ? 0x3070FF : 0x30E040);
+        bw.write_u8(0);
+        for (char ch : reason) bw.write_u8(static_cast<uint8_t>(ch));
+        for (auto& o : players) {
+            if (!o || o->loading || !o->ext_teamplay || o->team != p.team)
+                continue;
+            send(*o, bw);
+        }
+    }
+
+    // The word said to the one player alone: "/pm #N words", the aimed
+    // player the client names for the %p of its own. The words are spoken
+    // as the sender team read, to the named player only - the same line
+    // the team reads, word for word, minus everybody else.
+    void pm_command(Player& p, const std::string& text) {
+        const std::string rest = trimmed(text.substr(3));
+        size_t digits = 0;
+        if (digits < rest.size() && rest[digits] == '#') ++digits;
+        const size_t start = digits;
+        while (digits < rest.size() && rest[digits] >= '0' &&
+               rest[digits] <= '9')
+            ++digits;
+        if (digits == start || digits >= rest.size() || rest[digits] != ' ') {
+            system_chat("usage: /pm <player> <message>", p.id);
+            return;
+        }
+        int dest = 0;
+        for (size_t i = start; i < digits; ++i)
+            dest = dest * 10 + (rest[i] - '0');
+        if (dest < 0 || dest >= kSlots || !players[dest] ||
+            !players[dest]->named) {
+            system_chat("No such player to tell.", p.id);
+            return;
+        }
+        const std::string message = trimmed(rest.substr(digits + 1));
+        if (message.empty()) {
+            system_chat("usage: /pm <player> <message>", p.id);
+            return;
+        }
+        ByteWriter bw;
+        bw.write_u8(static_cast<uint8_t>(PacketId::ChatMessage));
+        bw.write_u8(static_cast<uint8_t>(p.id));
+        bw.write_u8(1);               // the team read, to the one alone
+        bw.write_cstring(message);
+        send(*players[dest], bw);
+    }
+
     void on_chat(Player& p, ByteReader& br) {
         if (!p.named || !br.can_read(2)) return;
         br.read_u8();
@@ -4372,6 +4644,10 @@ struct Server::Impl {
                 reset_run();
                 if (p.alive) spawn(p);
             } else if (text == "/clearwave" && horde_mode()) clear_wave();
+            else if (text.rfind("/pingmark", 0) == 0)
+                ping_mark_command(p, text);
+            else if (text.rfind("/pm", 0) == 0)
+                pm_command(p, text);
             else if (horde_mode() &&
                      (text.rfind("/turret", 0) == 0 || text.rfind("/sentry", 0) == 0)) {
                 turret_command(p, text);

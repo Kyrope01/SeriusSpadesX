@@ -108,6 +108,33 @@ constexpr double kStuckDigWindup = 3.0;
 // mills at is never far from where it mills.
 constexpr double kDigWatchSeconds = 8.0;
 constexpr int kDigWatchGain = 3;
+// The detour licence: a road the walk can hold is a road the walker
+// walks - twenty counts of detour beat a hole in a wall of four, and
+// the walls a maze turns against the wave were raised on purpose.
+// But a town sealed to one gate prices its detours in hundreds, and
+// the head packed at a walled gate reads a road it will never finish:
+// the shuffle hides it from the stuck clock, the fluctuation of the
+// shuffling pack winds the watch again, and the gate stays sealed for
+// as long as the wave is polite about it. So the two fields are
+// weighed head to head at the feet: a walk held kDigDetour above the
+// crossing the spade prices from the same floor is a detour the
+// honesty of the walk cannot pay for, and the stuck head owed the
+// spade all along is granted it - the dig walk names the crossing,
+// and the wall it names comes down where it says, be the detour a
+// hundred counts or a maze turn the better answer. The condition of
+// the weighing: the leg field must read at the feet, and the stuck
+// clock must have caught the head besides, for the ratio alone is a
+// coin the plain flips on every march under a town it cannot judge -
+// the walker that walks prices no spade, whatever the fields say.
+constexpr int kDigDetour = 50;
+// The half second churn of a field recomputed makes brief readings
+// flicker, and a licence that flips with the flicker is a stroke, a
+// step away, a stroke again. The weighing of the two fields is held
+// against time: only a ratio held this long is a detour at all, and
+// the moment the reading breaks - the breach opens, the march prices
+// fair again - the clock stands down and the road is the road once
+// more.
+constexpr double kDigDetourSeconds = 2.0;
 // The flight a licensed stroke cuts into a wall: three strips into
 // the face, each strip standing its room one step higher than the
 // strip before it, the whole lane three wide. A wall one stroke
@@ -539,6 +566,15 @@ struct Player {
     // to dig, no licence owed for pacing alone.
     double dig_watch_at = -1.0;
     int dig_watch_dist = 0;
+    // The detour clock, leader only: the walk and the spade weighed
+    // at the feet. A walk held kDigDetour above the crossing the
+    // spade reads from the same floor, held for kDigDetourSeconds at
+    // a stretch, is a detour the stuck head at the wall owes its
+    // spade. The clock runs only while the ratio holds: a march that
+    // prices fair, a leg field gone silent, a leader off the walk or
+    // a pack of followers stands the clock down, and the road is
+    // the road again.
+    double detour_at = -1.0;
     // When it last flung itself at the step it could not climb.
     double pounce_at = -1e9;
     // When its line last rode the last resort down the road: the mercy
@@ -1303,6 +1339,7 @@ struct Server::Impl {
             p.foot_dist = -1;
             p.stall_windows = 0;
             p.dig_watch_at = -1.0;
+            p.detour_at = -1.0;
             p.alive = true;
             p.tool = kToolWeapon;
             if (p.zombie) p.tool = kToolSpade;   // it never fires a shot
@@ -2340,7 +2377,30 @@ struct Server::Impl {
         const bool watch_licence = p.dig_watch_at >= 0.0 &&
                                    world_time - p.dig_watch_at >= kDigWatchSeconds &&
                                    world_time - p.spade_at >= horde_cfg.dig_seconds;
-        const bool licensed = stuck_licence || watch_licence;
+        // The detour licence: the road is the road, and only the
+        // mute ground, the milled pack and the held work were owed
+        // the spade before now. But a town sealed to one gate prices
+        // the road to its open gate in hundreds while the spade
+        // prices the crossing at the walled one in tens, and the
+        // head packed at the walled gate reads that road for as long
+        // as the walk is taken at its word - the shuffle hides it
+        // from the stuck clock, the shuffling of the pack winds the
+        // watch anew, and the siege mills at the wall it should open.
+        // So the stalemate is weighed instead of honoured: a head
+        // the stuck clock has caught, reading at its feet a walk
+        // held kDigDetour above the crossing the spade prices from
+        // the same floor for kDigDetourSeconds, owes the spade after
+        // all - and the crossing the dig walk names is the one that
+        // comes down, detour of a hundred or honest maze turn aside.
+        const bool detour_licence = leg_led &&
+                                    p.stuck_at >= 0.0 &&
+                                    p.detour_at >= 0.0 &&
+                                    world_time - p.detour_at >=
+                                        kDigDetourSeconds &&
+                                    world_time - p.spade_at >=
+                                        horde_cfg.dig_seconds;
+        const bool licensed = stuck_licence || watch_licence ||
+                              detour_licence;
         // The grip of work: a stroke within kDigStaySeconds keeps the
         // gate and the advice both, so a face once begun is a face
         // that gets finished, whatever the field's half-second churn
@@ -2639,6 +2699,7 @@ struct Server::Impl {
                 q->stall_windows = 0;
                 q->stuck_at = -1.0;
                 q->dig_watch_at = -1.0;
+                q->detour_at = -1.0;
                 q->walk_ref = dest;
                 q->walk_ref_at = world_time;
                 q->teleport_at = world_time;
@@ -2966,6 +3027,24 @@ struct Server::Impl {
             } else if (p.ahead_id < 0 && score < 0 &&
                        p.dig_watch_at >= 0.0) {
                 p.dig_watch_at = -1.0;   // nowhere either walk reads
+            }
+            // The detour clock, leader only: the two walks weighed at
+            // the feet, window by window. A leg field that reads, a spade
+            // field that reads, and a walk held kDigDetour above the
+            // spade own crossing: that alone is a detour kept out of
+            // the honesty of the walk, and the clock runs on it. A
+            // march that prices fair, a spade field gone silent, a
+            // head off the walk or a follower in line stands the
+            // clock down - the road is the road again.
+            if (p.ahead_id < 0 && fd >= 0) {
+                const int dd = horde->dig_distance(cx, cy, fz);
+                if (dd >= 0 && fd >= dd + kDigDetour) {
+                    if (p.detour_at < 0.0) p.detour_at = world_time;
+                } else {
+                    p.detour_at = -1.0;   // the detour is off: hold
+                }
+            } else if (p.detour_at >= 0.0) {
+                p.detour_at = -1.0;       // no weighing to hold
             }
             if (p.ahead_id >= 0 || p.body.airborne) {
                 p.foot_dist = -1;          // off the walk or a step in line

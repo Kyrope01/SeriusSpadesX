@@ -191,9 +191,9 @@ void test_vault() {
     std::printf("[vault] the crossing surface is handed back\n");
     SolidMap map;
     plain(map);
-    // A lane shut by three-high walls both sides, and a stair of two
-    // at its head: the climb is the only way out, and the advice has
-    // no cheaper neighbour to name instead.
+    // A lane shut by three-high walls both sides, a stair of two at
+    // its head: the walls hedged the corridor, the tread prices a whole
+    // arc, and the priced advice walks the lane out the way it came.
     for (int i = 195; i <= 200; ++i) {
         map.set_block(i, 255, 31, true);
         map.set_block(i, 255, 30, true);
@@ -215,12 +215,11 @@ void test_vault() {
     map.set_block(220, 220, 36, true);
     horde::Horde h(map, horde_cfg(256, 256));
     int tx = -1, ty = -1, tz = 999;
-    check(h.next_step(199, 256, 32, tx, ty, tz) && tx == 200 && ty == 256,
-          "from the shut lane the stair tread is the advice");
-    check(tz == 30, "the tread handed back is two above the feet");
-    check(32 - tz == horde::Config::kWalkClimb,
-          "the climb is priced the one jump the legs owe");
-    check(h.next_step(200, 256, 30, tx, ty, tz) && tz == 32,
+    check(h.next_step(199, 256, 32, tx, ty, tz) && tx == 198 && ty == 256
+              && tz == 32,
+          "the priced step sends the shut lane out the way it came");
+    check(h.next_step(200, 256, 30, tx, ty, tz) && tx == 201 && ty == 256
+              && tz == 32,
           "off the tread the crossing is a fall, not a climb");
     check(h.distance(100, 100, 29) < 0,
           "the top of a pile of three is no floor of the walk");
@@ -230,6 +229,77 @@ void test_vault() {
     tz = 54321;
     check(!h.next_step(256, 256, 32, tx, ty, tz) && tz == 54321,
           "at the core no step helps, and tz keeps what it came in with");
+}
+
+void test_stair_price() {
+    std::printf("[stair] the tall tread against the stair of one\n");
+    // A plateau four high, shut on all sides, the core on its top: the
+    // LostValley pyramid shape. Twin stairs side by side on its west
+    // face - the stair of one, three treads deep, and beside it the
+    // tall tread of two. The climb of two costs more than the arc it
+    // rides, so the stair of one is the way the walker takes.
+    {
+        SolidMap map;
+        plain(map);
+        for (int x = 180; x <= 232; ++x)
+            for (int y = 200; y <= 312; ++y)
+                for (int z = 28; z <= 31; ++z)
+                    map.set_block(x, y, z, true);
+        for (int i = 0; i < 3; ++i)
+            for (int z = 28; z <= 30 - i; ++z)
+                map.set_block(180 + i, 257, z, false);
+        for (int z = 28; z <= 29; ++z)
+            map.set_block(180, 255, z, false);
+        horde::Horde h(map, horde_cfg(206, 256));
+        int x = 150, y = 256, z = 32, grey = 0, black = 0, climbs = 0;
+        for (int steps = 0; (x != 206 || y != 256) && steps < 400; ++steps) {
+            int tx, ty, tz;
+            if (!h.next_step(x, y, z, tx, ty, tz)) break;
+            if (tx == 180 && ty == 257) ++grey;
+            if (tx == 180 && ty == 255) ++black;
+            if (z - tz == horde::Config::kWalkClimb) ++climbs;
+            x = tx;
+            y = ty;
+            z = tz;
+        }
+        check(x == 206 && y == 256,
+              "the walker reaches the core on the plateau");
+        check(grey == 1 && black == 0,
+              "the stair of one is the stair taken");
+        check(climbs == 0,
+              "no tread of the walk is a climb of two blocks");
+    }
+    // The same plateau, the tall stair alone: carved without its rival
+    // it is the only way up, and the walk takes it as ever.
+    {
+        SolidMap map;
+        plain(map);
+        for (int x = 180; x <= 232; ++x)
+            for (int y = 200; y <= 312; ++y)
+                for (int z = 28; z <= 31; ++z)
+                    map.set_block(x, y, z, true);
+        for (int z = 28; z <= 29; ++z)
+            map.set_block(180, 255, z, false);
+        horde::Horde h(map, horde_cfg(206, 256));
+        int x = 150, y = 256, z = 32, black = 0, climbs = 0;
+        for (int steps = 0; (x != 206 || y != 256) && steps < 400; ++steps) {
+            int tx, ty, tz;
+            if (!h.next_step(x, y, z, tx, ty, tz)) break;
+            if (tx == 180 && ty == 255) ++black;
+            if (z - tz == horde::Config::kWalkClimb) ++climbs;
+            x = tx;
+            y = ty;
+            z = tz;
+        }
+        check(x == 206 && y == 256,
+              "the tall stair serves where it is the only stair");
+        check(black == 1 && climbs == 2,
+              "its two treads are climbed, two blocks a tread");
+        int tx = -1, ty = -1, tz = 999;
+        check(h.next_step(179, 255, 32, tx, ty, tz) && tx == 180 && ty == 255
+                  && 32 - tz == horde::Config::kWalkClimb,
+              "its first tread hands its climb back, two above the feet");
+    }
 }
 
 void test_veto() {
@@ -795,6 +865,7 @@ void test_roam() {
 int main() {
     test_field();
     test_vault();
+    test_stair_price();
     test_veto();
     test_waves();
     test_route();

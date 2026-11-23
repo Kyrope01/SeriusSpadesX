@@ -226,6 +226,14 @@ struct Config {
     // it is worth kLevelShy steps a block. On level ground the price is
     // nothing: a step a cell, as ever.
     static constexpr int kLevelShy = 8;
+    // A tread that spends the whole jump - a move of two blocks in one
+    // crossing - pays kJumpShy steps on top of its own blocks of
+    // climb: two stairs laid side by side, one of one and one of two,
+    // and the stair of one climbs the dearer way only when nothing
+    // around pays for the detour, so where both stand the pack climbs
+    // one block at a time - and where the tall tread is the only way
+    // up, it is walked as ever.
+    static constexpr int kJumpShy = 5;
     // How many spawn points a wave comes from is the wave's own number,
     // read at wave_points: one while the route is watched, more as the
     // walk proves itself. The points are ranked by the way the walk

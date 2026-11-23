@@ -395,6 +395,14 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
                     // walks one floor is one pack, where a march that rolls
                     // up and down every ripple comes apart on them.
                     nd += Config::kLevelShy * (dz < 0 ? -dz : dz);
+                    // The tall tread is one crossing but a whole arc: the
+                    // jump a climb of kWalkClimb rides pays kJumpShy steps
+                    // over its blocks, so the stair of one beats the stair
+                    // of two wherever both are laid. The tall tread stays
+                    // the way where it is the only one - or where the way
+                    // around costs more than the arc.
+                    if (dz == -Config::kWalkClimb || dz == Config::kWalkClimb)
+                        nd += Config::kJumpShy;
                 }
                 // Keeps to the open: the landing's two shoulder columns,
                 // the sides the step runs past - room asks the same
@@ -490,6 +498,19 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
     const int z = surface(x, y, bk < 0 ? 0 : bk);
     static const int kDx[4] = {1, -1, 0, 0};
     static const int kDy[4] = {0, 0, 1, -1};
+    // The advice weighs the step itself. The flood recorded in the dist
+    // here what being entered from each neighbour cost it - the move,
+    // the levels it climbed or dropped, the jump a tall tread rides,
+    // the shoulders the landing brushed. The walker steps back the way
+    // that bargain read cheapest, never through a pricier step toward
+    // a cheaper dist it can read across a fold: a stair walked midway
+    // no longer leaps the face for the top it sees over its treads.
+    const uint64_t room =
+        ((1ull << Config::kStandHead) - 1ull) << (z - Config::kStandHead);
+    const uint64_t side_ax = map_.column(x, y + 1);
+    const uint64_t side_bx = map_.column(x, y - 1);
+    const uint64_t side_ay = map_.column(x + 1, y);
+    const uint64_t side_by = map_.column(x - 1, y);
     int best = -1, bx = -1, by = -1;
     for (int k = 0; k < 4; ++k) {
         const int nx = x + kDx[k], ny = y + kDy[k];
@@ -498,7 +519,6 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
         for (int m = 0; m < surf_count(nx, ny); ++m) {
             const int nd = dist_[base + m];
             if (nd < 0) continue;
-            if (here >= 0 && nd >= here) continue;  // downhill only
             // The field prices the crossing: without the dig it takes only
             // what legs cross both ways - a jump, up or down, nothing
             // taller - so the neighbour handed back is always a step the
@@ -506,8 +526,20 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
             // it is one the legs truly reach.
             const int dz = surface(nx, ny, m) - z;
             if (dz > Config::kWalkClimb || dz < -Config::kWalkClimb) continue;
-            if (best < 0 || nd < best) {
-                best = nd;
+            int price = 1 + Config::kLevelShy * (dz < 0 ? -dz : dz);
+            if (dz == -Config::kWalkClimb || dz == Config::kWalkClimb)
+                price += Config::kJumpShy;
+            if (kDx[k] != 0) {
+                if (side_ax & room) price += kWallShy;
+                if (side_bx & room) price += kWallShy;
+            } else {
+                if (side_ay & room) price += kWallShy;
+                if (side_by & room) price += kWallShy;
+            }
+            const int score = nd + price;
+            if (here >= 0 && score > here) continue;
+            if (best < 0 || score < best) {
+                best = score;
                 bx = nx;
                 by = ny;
             }
@@ -603,6 +635,16 @@ bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty, int& tz) {
     const int z = surface(x, y, rk < 0 ? 0 : rk);
     static const int kDx[4] = {1, -1, 0, 0};
     static const int kDy[4] = {0, 0, 1, -1};
+    // The advice weighs the step itself, as the two-arg read does: the
+    // dist here stands entered at what each neighbour paid to step in
+    // - the move, the levels, the jump, the shoulders - and the walker
+    // steps back the way that bargain read cheapest.
+    const uint64_t room =
+        ((1ull << Config::kStandHead) - 1ull) << (z - Config::kStandHead);
+    const uint64_t side_ax = map_.column(x, y + 1);
+    const uint64_t side_bx = map_.column(x, y - 1);
+    const uint64_t side_ay = map_.column(x + 1, y);
+    const uint64_t side_by = map_.column(x - 1, y);
     int best = -1, bx = -1, by = -1, bz = z;
     for (int k = 0; k < 4; ++k) {
         const int nx = x + kDx[k], ny = y + kDy[k];
@@ -611,14 +653,25 @@ bool Horde::next_step(int x, int y, int zfoot, int& tx, int& ty, int& tz) {
         for (int m = 0; m < surf_count(nx, ny); ++m) {
             const int nd = dist_[base + m];
             if (nd < 0) continue;
-            if (here >= 0 && nd >= here) continue;  // downhill only
             // The crossing stays priced against the footing: the read
             // promises a step the legs can make from the ground they are
             // on, the same both ways the field ever demands.
             const int dz = surface(nx, ny, m) - z;
             if (dz > Config::kWalkClimb || dz < -Config::kWalkClimb) continue;
-            if (best < 0 || nd < best) {
-                best = nd;
+            int price = 1 + Config::kLevelShy * (dz < 0 ? -dz : dz);
+            if (dz == -Config::kWalkClimb || dz == Config::kWalkClimb)
+                price += Config::kJumpShy;
+            if (kDx[k] != 0) {
+                if (side_ax & room) price += kWallShy;
+                if (side_bx & room) price += kWallShy;
+            } else {
+                if (side_ay & room) price += kWallShy;
+                if (side_by & room) price += kWallShy;
+            }
+            const int score = nd + price;
+            if (here >= 0 && score > here) continue;
+            if (best < 0 || score < best) {
+                best = score;
                 bx = nx;
                 by = ny;
                 bz = surface(nx, ny, m);

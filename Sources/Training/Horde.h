@@ -85,6 +85,19 @@ struct Config {
     static constexpr int kSpawnSites = 10;
     int spawn_x[kSpawnSites] = {32, 479, 32, 479, 181, 330, 181, 330, 32, 479};
     int spawn_y[kSpawnSites] = {32, 32, 479, 479, 32, 32, 479, 479, 255, 255};
+    // A site the map named may stand under a roof the terrain alone
+    // would misname: the third number of its triple is the layer of the
+    // ground the wave is asked to stand on, the same trust the core foot
+    // layer enjoys (-1 reads the terrain itself).
+    int spawn_z[kSpawnSites] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+    // Whether the map named its spawn sites, and how many it named: the
+    // named sites are then the whole pool the fronts come from, exactly
+    // as named, no redraw ever moving them, and a wave that opens fewer
+    // fronts than the pool holds draws them by lot (see draw_lot). A
+    // map that named none keeps the ten built above and the dealing
+    // quarters of roam_spawns.
+    bool spawn_named = false;
+    int spawn_count = kSpawnSites;
     // The spawn box width of earlier days; the clearing is five by five now.
     int spawn_size = 12;
     // Whether each wave deals its fronts a new asking round the town
@@ -149,8 +162,12 @@ struct Config {
     static constexpr int kPackGrowth = 5;
     static constexpr int kWaveMaxZombies = 250;
     int wave_points(int wave) const {
-        const int cap = spawn_point_cap < 1
+        int pool = kSpawnSites;
+        if (spawn_named && spawn_count >= 1 && spawn_count < kSpawnSites)
+            pool = spawn_count;
+        int cap = spawn_point_cap < 1
             ? 1 : (spawn_point_cap > kSpawnSites ? kSpawnSites : spawn_point_cap);
+        if (cap > pool) cap = pool;   // fewer named sites than fronts to open
         const int w = (std::max)(1, wave);
         return w < cap ? w : cap;
     }
@@ -275,6 +292,15 @@ public:
     // reads it to say one trail a front, each in its front's own colour:
     // a wave of many fronts is watched as many ways in, not one.
     int wave_fronts(int wave) const;
+    // The pool the fronts come from: the whole ten, or the sites a map
+    // listed when it named any at all.
+    int spawn_pool() const {
+        if (!cfg_.spawn_named || cfg_.spawn_count < 1)
+            return Config::kSpawnSites;
+        return cfg_.spawn_count < Config::kSpawnSites
+                   ? cfg_.spawn_count : Config::kSpawnSites;
+    }
+
     // The corner of `rank` in the order the last wave walked its corners
     // in: rank 0 is where the wave comes from, anchored, its route truly
     // ending at the core's doorstep, the shortest first. When the terrain
@@ -282,6 +308,7 @@ public:
     // walk takes whatever way the map leaves it.
     int ranked_corner(int rank) const {
         if (rank < 0 || rank > Config::kSpawnSites - 1) return 0;
+        if (cfg_.spawn_named && rank < lot_n_) return lot_corner_[rank];
         return rank_corner_[rank];
     }
     // The settings this runs with, for the host's announcements.
@@ -447,6 +474,10 @@ private:
     // Informs the scout's reading and the veto's (both read
     // roam_x_/roam_y_).
     void roam();
+    // The fronts of the wave the reading prepares, drawn from the named
+    // pool by lot when the wave opens fewer of them than the pool holds
+    // (a map that named no site keeps the scout ranking whole).
+    void draw_lot();
     void begin_wave(double now);
     void place_wave(double now);
 
@@ -493,6 +524,13 @@ private:
     // its own, at birth and again as each wave falls.
     int roam_x_[Config::kSpawnSites] = {};
     int roam_y_[Config::kSpawnSites] = {};
+    // The fronts drawn by lot for the wave draw_lot prepared: the corners
+    // a named pool wave truly comes from, in scout order between them,
+    // kept across field edits so a walking wave never re deals the set
+    // it already placed.
+    int lot_corner_[Config::kSpawnSites] = {};
+    int lot_n_ = 0;
+    int lot_wave_ = -1;
     std::mt19937 rng_{std::random_device{}()};
 };
 

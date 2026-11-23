@@ -435,7 +435,9 @@ bool Horde::reach_spawn(const std::vector<int32_t>& dist) const {
             if (d[k] != kUnreachable) return true;
         return false;
     };
-    for (int c = 0; c < Config::kSpawnSites; ++c) {
+    // The named pool holds the fronts there are; a site beyond it is a
+    // corner the map never asked for.
+    for (int c = 0; c < spawn_pool(); ++c) {
         const int cx = roam_x_[c], cy = roam_y_[c];
         for (int r = 0; r < Config::kSpawnSearch; ++r) {
             for (int y = cy - r; y <= cy + r; ++y) {
@@ -735,6 +737,16 @@ bool Horde::corner_anchor(int corner, int& x, int& y) const {
 // packs on, read where the painting asks it - the host says one trail a
 // front, and here is how many trails a wave of `wave` says.
 int Horde::wave_fronts(int wave) const {
+    // A named pool draws its fronts by lot: the count the wave truly
+    // opens is the drawn ones whose anchors stand.
+    if (cfg_.spawn_named) {
+        int fronts = 0;
+        for (int r = 0; r < lot_n_; ++r) {
+            if (anchor_x_[lot_corner_[r]] < 0) break;
+            ++fronts;
+        }
+        return fronts;
+    }
     const int nc = cfg_.wave_points(wave);
     int fronts = 0;
     for (int r = 0; r < nc && anchor_x_[rank_corner_[r]] >= 0; ++r) ++fronts;
@@ -921,6 +933,15 @@ bool Horde::can_build(int x, int y, int z) {
 // this wave asked for is still refused, wherever the asking moved.
 void Horde::roam() {
     std::uniform_real_distribution<double> bit(0.0, 1.0);
+    // A map that named its sites keeps them exactly where it named them:
+    // no asking is redrawn, the named ground stands, wave after wave.
+    // The reading is still spent at the fall of a wave, so the next
+    // scout reads the field as the new wave walks it and draws the
+    // fronts of that wave from the named pool by lot (see draw_lot).
+    if (cfg_.spawn_named) {
+        scouted_ = false;
+        return;
+    }
     // The sectors, dealt shuffled: corner c holds sector deal[c].
     int deal[Config::kSpawnSites];
     for (int c = 0; c < Config::kSpawnSites; ++c) deal[c] = c;
@@ -958,6 +979,37 @@ void Horde::roam() {
     // and the scout - the intermission's own reading, before the wave
     // stands up - reads it fresh.
     scouted_ = false;
+}
+
+// The fronts of the wave the reading prepares, on a map that named its
+// sites: the wave that opens fewer fronts than the named pool holds
+// takes its pick of the anchored ones by lot, and the drawn fronts keep
+// the scout order between them, the shortest way in walking first -
+// every named point takes its turn from wave to wave, none camped and
+// none forgotten. The lot is drawn for the wave the reading prepares
+// (the one walking when one is, the coming one otherwise) and it stands
+// across field edits, for the fronts a wave already placed must never
+// be re dealt under its own feet.
+void Horde::draw_lot() {
+    const int target = phase_ == Phase::Wave ? wave_ : wave_ + 1;
+    if (lot_wave_ == target) return;
+    const int nc = cfg_.wave_points(target);
+    lot_n_ = 0;
+    for (int r = 0; r < spawn_pool(); ++r)
+        if (anchor_x_[rank_corner_[r]] >= 0)
+            lot_corner_[lot_n_++] = rank_corner_[r];
+    if (lot_n_ > nc) {
+        std::shuffle(lot_corner_, lot_corner_ + lot_n_, rng_);
+        const auto rank_of = [&](int corner) {
+            for (int r = 0; r < spawn_pool(); ++r)
+                if (rank_corner_[r] == corner) return r;
+            return Config::kSpawnSites;
+        };
+        std::sort(lot_corner_, lot_corner_ + nc,
+                  [&](int a, int b) { return rank_of(a) < rank_of(b); });
+        lot_n_ = nc;
+    }
+    lot_wave_ = target;
 }
 
 void Horde::scout() {
@@ -998,15 +1050,40 @@ void Horde::scout() {
                 if (d[k] >= 0 && (best < 0 || d[k] < best)) best = d[k];
             return best;
         };
+        // A site whose settings named a ground layer reads its
+        // candidates off that layer instead: the surface closest to
+        // the named one within kWalkDrop - the room under a roof, the
+        // shelf under a canopy - and a column that carries no floor
+        // of the asking notes nothing, whatever its tops stand at.
+        int ask = -1;
         const auto note = [&](int x, int y) {
             if (!stands(x, y)) return;
+            int g = ground(x, y);
+            if (ask >= 0) {
+                g = -1;
+                const int ns = surf_count(x, y);
+                int go = Config::kWalkDrop + 1;
+                for (int k = 0; k < ns; ++k) {
+                    const int z2 = surface(x, y, k);
+                    const int off = z2 > ask ? z2 - ask : ask - z2;
+                    if (off > Config::kWalkDrop) continue;
+                    if (g < 0 || off < go) {
+                        g = z2;
+                        go = off;
+                    }
+                }
+                if (g < 0) return;
+            }
             rungs_x.push_back(x);
             rungs_y.push_back(y);
-            rungs_g.push_back(ground(x, y));
+            rungs_g.push_back(g);
         };
+        const int pool = spawn_pool();
         for (int c = 0; c < Config::kSpawnSites; ++c) {
             anchor_x_[c] = -1;
             anchor_y_[c] = 0;
+            if (c >= pool) continue;
+            ask = cfg_.spawn_z[c];
             const int cx = roam_x_[c], cy = roam_y_[c];
             int best_d = -1;
             for (int r = 0; r < Config::kSpawnSearch; ++r) {
@@ -1055,7 +1132,7 @@ void Horde::scout() {
         };
         std::vector<RouteCell> trace;
         Ranked ways[Config::kSpawnSites];
-        for (int c = 0; c < Config::kSpawnSites; ++c) {
+        for (int c = 0; c < pool; ++c) {
             ways[c].corner = c;
             ways[c].anchored = anchor_x_[c] >= 0;
             ways[c].end = ways[c].dist = 0;
@@ -1068,7 +1145,7 @@ void Horde::scout() {
                                   : best_len(trace.back().x, trace.back().y);
             }
         }
-        std::sort(ways, ways + Config::kSpawnSites, [](const Ranked& a, const Ranked& b) {
+        std::sort(ways, ways + pool, [](const Ranked& a, const Ranked& b) {
             if (a.anchored != b.anchored) return a.anchored;
             if (!a.anchored) return a.corner < b.corner;
             // A way in that arrives beats one that dies against a cliff.
@@ -1082,8 +1159,8 @@ void Horde::scout() {
             if (a.end != b.end) return a.end < b.end;
             return a.corner < b.corner;  // the map reads NE, NW, SE, SW last
         });
-        for (int c = 0; c < Config::kSpawnSites; ++c) rank_corner_[c] = ways[c].corner;
-        for (int c = 0; c < Config::kSpawnSites; ++c)
+        for (int c = 0; c < pool; ++c) rank_corner_[c] = ways[c].corner;
+        for (int c = 0; c < pool; ++c)
             if (anchor_x_[c] >= 0) return true;   // the pass found a way in
         return false;
     };
@@ -1094,6 +1171,9 @@ void Horde::scout() {
     // blocks: the wave still comes, at the pace the pricing says.
     if (!pass(dist_, false) && cfg_.dig) pass(dig_dist_, true);
     scouted_ = true;
+    // The named pool, when there is one, draws the fronts of the wave
+    // this reading prepares before anyone asks for them.
+    if (cfg_.spawn_named) draw_lot();
 }
 
 // The wave stands on the scout's reading: the first of the ranked corners
@@ -1103,12 +1183,20 @@ void Horde::scout() {
 // are the scout's, so the host paints the route the wave truly takes.
 void Horde::place_wave(double now) {
     if (!scouted_) scout();   // the reading only moves with the field
+    if (cfg_.spawn_named) draw_lot();
     const int n = cfg_.wave_zombies(wave_);
     const int nc = cfg_.wave_points(wave_);
-    // The anchored ways sort to the front, so the active ranks are the
-    // first few of them, however many the corners could raise.
+    // The fronts the wave stands on: on a named pool the drawn lot
+    // (draw_lot), elsewhere the first of the ranked ways, anchored.
     int ranks = 0;
-    for (int r = 0; r < nc && anchor_x_[rank_corner_[r]] >= 0; ++r) ++ranks;
+    if (cfg_.spawn_named) {
+        for (int r = 0; r < lot_n_; ++r) {
+            if (anchor_x_[lot_corner_[r]] < 0) break;
+            ++ranks;
+        }
+    } else {
+        for (int r = 0; r < nc && anchor_x_[rank_corner_[r]] >= 0; ++r) ++ranks;
+    }
     // The wave stands up only where the walk truly comes in, and it is
     // born in a clearing, not in a pocket: the road is walked from its
     // far end toward the core, and the first cell whose floor - one the
@@ -1206,7 +1294,8 @@ void Horde::place_wave(double now) {
     };
     pending_.clear();
     for (int i = 0; i < n && ranks > 0; ++i) {
-        const int corner = rank_corner_[i % ranks];
+        const int corner = cfg_.spawn_named ? lot_corner_[i % ranks]
+                                            : rank_corner_[i % ranks];
         raise_site(corner);
         const Site& s = sites[corner];
         // The leader takes the site itself and its road; the rest fill

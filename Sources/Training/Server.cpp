@@ -806,6 +806,9 @@ struct Server::Impl {
     // a room under a roof, it would name the hill above the core's head.
     void read_map_settings(const std::string& text) {
         map_core_x = map_core_y = map_core_z = -1;
+        map_spawn_x.clear();
+        map_spawn_y.clear();
+        map_spawn_z.clear();
         if (text.empty()) return;
         auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
         auto word_char = [](char c) {
@@ -867,22 +870,73 @@ struct Server::Impl {
             ++i;
             while (i < text.size() && blank(text[i])) ++i;
             std::vector<double> ns;
+            std::vector<std::vector<double>> rows;
             if (i < text.size() && text[i] == '[') {
-                size_t shut = i + 1;
-                while (shut < text.size() && text[shut] != ']') ++shut;
-                if (shut >= text.size()) break;
-                size_t from = i + 1;
-                for (;;) {
-                    const size_t comma = text.find(',', from);
-                    const std::string one = comma == std::string::npos || comma > shut
-                                                ? text.substr(from, shut - from)
-                                                : text.substr(from, comma - from);
-                    const std::string cut = trimmed(one);
-                    if (!cut.empty()) ns.push_back(std::strtod(cut.c_str(), nullptr));
-                    if (comma == std::string::npos || comma > shut) break;
-                    from = comma + 1;
+                // A list of lists - the sites a map would name its
+                // zombies at, each its own list - reads its own outer
+                // bracket to the last, for the flat read would stop at
+                // the first closing bracket it meets.
+                size_t ditto = i + 1;
+                while (ditto < text.size() && blank(text[ditto])) ++ditto;
+                if (ditto < text.size() && text[ditto] == '[') {
+                    size_t shut = i;
+                    size_t depth = 0;
+                    while (shut < text.size()) {
+                        if (text[shut] == '[') ++depth;
+                        else if (text[shut] == ']') {
+                            if (--depth == 0) break;
+                        }
+                        ++shut;
+                    }
+                    if (shut >= text.size()) break;
+                    size_t at = ditto;
+                    for (;;) {
+                        while (at < text.size() &&
+                               (blank(text[at]) || text[at] == ','))
+                            ++at;
+                        if (at >= text.size() || at > shut || text[at] != '[')
+                            break;
+                        size_t close = at + 1;
+                        while (close < shut && text[close] != ']') ++close;
+                        if (close >= shut) break;
+                        std::vector<double> one;
+                        size_t from = at + 1;
+                        for (;;) {
+                            const size_t comma = text.find(',', from);
+                            const std::string row =
+                                comma == std::string::npos || comma > close
+                                    ? text.substr(from, close - from)
+                                    : text.substr(from, comma - from);
+                            const std::string cut = trimmed(row);
+                            if (!cut.empty()) one.push_back(
+                                std::strtod(cut.c_str(), nullptr));
+                            if (comma == std::string::npos || comma > close)
+                                break;
+                            from = comma + 1;
+                        }
+                        rows.push_back(one);
+                        at = close + 1;
+                    }
+                    i = shut + 1;
+                } else {
+                    size_t shut = i + 1;
+                    while (shut < text.size() && text[shut] != ']') ++shut;
+                    if (shut >= text.size()) break;
+                    size_t from = i + 1;
+                    for (;;) {
+                        const size_t comma = text.find(',', from);
+                        const std::string one =
+                            comma == std::string::npos || comma > shut
+                                ? text.substr(from, shut - from)
+                                : text.substr(from, comma - from);
+                        const std::string cut = trimmed(one);
+                        if (!cut.empty())
+                            ns.push_back(std::strtod(cut.c_str(), nullptr));
+                        if (comma == std::string::npos || comma > shut) break;
+                        from = comma + 1;
+                    }
+                    i = shut + 1;
                 }
-                i = shut + 1;
             } else if (i < text.size() && (text[i] == '\'' || text[i] == '"')) {
                 skip_quoted(i);
             } else {
@@ -895,12 +949,31 @@ struct Server::Impl {
                 i = end;
             }
             const std::string key_l = lowered(key);
-            if ((key_l == "core_position" || key_l == "core") && ns.size() >= 2) {
+            // The sites the map names its zombie fronts at, site by
+            // site: a pair names a cell, a triple names the ground
+            // layer the site stands on besides. The world holds ten
+            // sites at most - the first ten stand.
+            if (key_l == "zombie_spawn_position" && !rows.empty()) {
+                for (const std::vector<double>& row : rows) {
+                    if (row.size() < 2) continue;
+                    if (map_spawn_x.size() >=
+                        static_cast<size_t>(horde::Config::kSpawnSites))
+                        break;
+                    map_spawn_x.push_back(static_cast<int>(row[0]));
+                    map_spawn_y.push_back(static_cast<int>(row[1]));
+                    map_spawn_z.push_back(row.size() >= 3
+                                             ? static_cast<int>(row[2]) : -1);
+                }
+            } else if ((key_l == "core_position" || key_l == "core") &&
+                       ns.size() >= 2) {
                 map_core_x = static_cast<int>(ns[0]);
                 map_core_y = static_cast<int>(ns[1]);
                 if (ns.size() >= 3) map_core_z = static_cast<int>(ns[2]);
             }
         }
+        if (!map_spawn_x.empty())
+            log("map settings: %d zombie spawn sites named",
+                static_cast<int>(map_spawn_x.size()));
         if (map_core_x >= 0 && map_core_z >= 0)
             log("map settings: core at %d, %d, foot layer %d",
                 map_core_x, map_core_y, map_core_z);
@@ -1021,6 +1094,10 @@ struct Server::Impl {
     // bedrock of the room its town hides in, named so the core can stand
     // inside and not on the hill above it.
     int map_core_x = -1, map_core_y = -1, map_core_z = -1;
+    // The spawn sites the map settings list, when they list any (the
+    // zombie_spawn_position key): the fronts come from these cells, in
+    // the order the file lists them, and no site is added beyond them.
+    std::vector<int> map_spawn_x, map_spawn_y, map_spawn_z;
     std::unique_ptr<horde::Horde> horde;
     horde::Phase horde_told = horde::Phase::Prep;
     int horde_wave_told = 0;
@@ -4836,18 +4913,50 @@ bool Server::start(std::string& err) {
         // the asked-for centres round the town, spread even and shuffled,
         // so no colour keeps the same corner game long. (The Horde's own
         // default stays the settings' fixed quarters - its tests read
-        // them deterministically.)
+        // them deterministically.) A map that named its spawn sites is
+        // spared the dealing: the named ground stands, wave after wave,
+        // and each wave draws the fronts it opens from the named pool
+        // by lot.
         s.horde_cfg.roam_spawns = true;
         // The map that named the core's foot layer is trusted as it
         // stands: the walk to land would drag the core of a room in the
         // hill out to the surface, the one thing its z exists to prevent.
         if (s.map_core_z < 1 || s.map_core_z > 62)
             s.nearest_land(s.horde_cfg.core_x, s.horde_cfg.core_y);
-        for (int k = 0; k < horde::Config::kSpawnSites; ++k) {
-            int x = s.horde_cfg.spawn_x[k], y = s.horde_cfg.spawn_y[k];
-            s.nearest_land(x, y);
-            s.horde_cfg.spawn_x[k] = x;
-            s.horde_cfg.spawn_y[k] = y;
+        // The sites the map named are the whole pool the fronts come
+        // from, in the file order, and the wave that opens fewer
+        // fronts than the pool holds draws them by lot. A site that
+        // named its ground layer is trusted as it stands, the walk to
+        // land spared it like the core of the room inside the hill; a
+        // site that named none walks to the nearest land, as ever.
+        const size_t named_sites = s.map_spawn_x.size();
+        if (named_sites > 0) {
+            int sites = static_cast<int>(named_sites);
+            if (sites > horde::Config::kSpawnSites)
+                sites = horde::Config::kSpawnSites;
+            s.horde_cfg.spawn_named = true;
+            s.horde_cfg.spawn_count = sites;
+            for (int k = 0; k < sites; ++k) {
+                int x = s.map_spawn_x[static_cast<size_t>(k)];
+                int y = s.map_spawn_y[static_cast<size_t>(k)];
+                int z = s.map_spawn_z[static_cast<size_t>(k)];
+                if (x < 2) x = 2;
+                if (y < 2) y = 2;
+                if (x > 509) x = 509;
+                if (y > 509) y = 509;
+                if (z < 1 || z > 62) z = -1;
+                if (z < 0) s.nearest_land(x, y);
+                s.horde_cfg.spawn_x[k] = x;
+                s.horde_cfg.spawn_y[k] = y;
+                s.horde_cfg.spawn_z[k] = z;
+            }
+        } else {
+            for (int k = 0; k < horde::Config::kSpawnSites; ++k) {
+                int x = s.horde_cfg.spawn_x[k], y = s.horde_cfg.spawn_y[k];
+                s.nearest_land(x, y);
+                s.horde_cfg.spawn_x[k] = x;
+                s.horde_cfg.spawn_y[k] = y;
+            }
         }
         // The host's own word for the guns' tables, when it wrote one:
         // horde.toml in the directory the server runs in, seen again at

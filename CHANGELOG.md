@@ -5,6 +5,16 @@ version's section at the top of its release notes, under "What's new", and
 the game shows those lines when it offers the update. Keep each line short:
 one change, in a player's words.
 
+## 0.3.7
+
+- New: the wheel opens on a Defence page - build, aim and clear the turrets
+  and the wave from the middle mouse button (horde)
+- Improved: the dead honour the maze - a pack sealed at a wall digs a way
+  through it at last, stairs and all, and only when its legs fail it
+- New: the campaign has an end - the last wave cleared, at twenty, is the
+  victory
+- New: zombies read as gray circles on the maps, whichever side watches
+
 ## 0.3.6
 
 - New: a headshot kill bursts the skull into pieces (Options, Effects to turn it off)

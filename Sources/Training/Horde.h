@@ -398,6 +398,13 @@ public:
     // and its placing. False when the corner reach holds no footing (a
     // corner with no anchor raises nothing).
     bool corner_anchor(int corner, int& x, int& y) const;
+    // The anchors of the corners and the ranking of their ways in: the
+    // reading the waves place themselves by, and the one the host paints
+    // the way in from while the world waits or walks. place_wave asks it
+    // before the wave stands up; tick keeps it fresh through the waiting
+    // phases, wherever the field under it was recomputed. Asked in the
+    // open, for the tests read the anchors outright.
+    void scout();
     // The way in from a cell, read off the walk: the cells one at a time,
     // each a legal crossing downhill, until the core's doorstep, each with
     // the surface the walk runs on it at. The route handed back is the
@@ -476,12 +483,6 @@ private:
     bool box_clear(int x, int y, int z) const;
     bool reach_spawn(const std::vector<int32_t>& dist) const;
     void flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig);
-    // The anchors of the four corners and the ranking of their ways in:
-    // the reading the waves place themselves by, and the one the host
-    // paints the way in from while the world waits or walks. place_wave
-    // asks it before the wave stands up; tick keeps it fresh through the
-    // waiting phases, wherever the field under it was recomputed.
-    void scout();
     // The asked-for centres, dealt at the horde's birth and again the
     // moment each wave falls when roam_spawns is on: the corners'
     // quarters shuffle round the compass and each centre is drawn
@@ -532,6 +533,12 @@ private:
     // for none): the route the host paints is traced from here.
     int anchor_x_[Config::kSpawnSites] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     int anchor_y_[Config::kSpawnSites] = {0};
+    // The layer the anchor itself stands on, the reading scout chose of
+    // its cell: on a map that named its sites, the ground the name asked
+    // of, whatever floor the walk likes better there - the wave rises
+    // on it, not on the roof the legs reach first. -1 for none.
+    int anchor_z_[Config::kSpawnSites] = {-1, -1, -1, -1, -1,
+                                        -1, -1, -1, -1, -1};
     // The spawn points in the order the last wave walked them (rank 0
     // first), and how many zombies that wave truly stood up.
     int rank_corner_[Config::kSpawnSites] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};

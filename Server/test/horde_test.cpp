@@ -354,6 +354,57 @@ void test_spawn_named() {
         check(x >= 0 && y >= 0 && gx <= 4 && gy <= 4,
               "its anchor stands on the nearest ring, not the border");
     }
+    // A reached roof must not steal the birth: the rooms under it stand
+    // sealed to the legs, a stair outside gives the walk its short way
+    // up onto the roof, and the wave still rises on the layer the name
+    // asked of, inside - the leader on the named point, the pack on the
+    // rooms around it.
+    {
+        SolidMap map;
+        plain(map);
+        for (int x = 296; x <= 304; ++x)
+            for (int y = 296; y <= 304; ++y) {
+                const int fx = x > 300 ? x - 300 : 300 - x;
+                const int fy = y > 300 ? y - 300 : 300 - y;
+                if (fx != 4 && fy != 4) continue;  // the walls, no door
+                for (int z = 26; z <= 31; ++z)
+                    map.set_block(x, y, z, true);
+            }
+        for (int x = 296; x <= 304; ++x)
+            for (int y = 296; y <= 304; ++y) {
+                map.set_block(x, y, 24, true);
+                map.set_block(x, y, 25, true);
+            }
+        for (int z = 30; z <= 33; ++z)
+            map.set_block(307, 300, z, true);
+        for (int z = 28; z <= 33; ++z)
+            map.set_block(306, 300, z, true);
+        for (int z = 26; z <= 33; ++z)
+            map.set_block(305, 300, z, true);
+        horde::Config cfg = horde_cfg(256, 256);
+        cfg.spawn_named = true;
+        cfg.spawn_count = 1;
+        cfg.spawn_x[0] = 300; cfg.spawn_y[0] = 300; cfg.spawn_z[0] = 32;
+        horde::Horde h(map, cfg);
+        h.restart(0.0);
+        h.tick(10.5);
+        std::vector<horde::SpawnAt> due;
+        h.take_due(due, 100.0);
+        check(due.size() == 20, "the named site raises its whole pack");
+        bool on_asked = true, inside = true;
+        for (const horde::SpawnAt& s : due) {
+            if (s.z != GROUND_TOP) on_asked = false;
+            if (s.x < 297 || s.x > 303 || s.y < 297 || s.y > 303)
+                inside = false;
+        }
+        check(on_asked,
+              "every walker rises on the layer the name asked of");
+        check(inside,
+              "every walker rises inside, not on the reached roof");
+        check(!due.empty() && due.front().x == 300 && due.front().y == 300
+                  && due.front().z == GROUND_TOP,
+              "the leader rises on the named point itself");
+    }
     // The unnamed world keeps its own reading: the frontier of the
     // corner reach - the border of the map itself on an open plain.
     {

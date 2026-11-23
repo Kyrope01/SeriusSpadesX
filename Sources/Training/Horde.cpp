@@ -973,7 +973,11 @@ bool Horde::can_build(int x, int y, int z) {
 // within two of the site's - and a road that nowhere finds its clearing
 // piles on the anchor's own floor, whatever room its neighbours give:
 // players pass through players in this game, and the crowd's push
-// splits the pile apart as it walks. The anchors are kept.
+// splits the pile apart as it walks. The anchors are kept. A map that
+// named its sites stands held above that road reading: the named
+// ground is the birthplace and its asked layer the floor, the road
+// keeps its own counsel, the clearing a bonus, the pile the honest
+// room.
 // The asking dealt again, a wave at a time: the asked-for centre of
 // every corner is redrawn the moment the wave before falls, so a front
 // keeps its colour but not its ground - the orange way in moves between
@@ -1086,7 +1090,10 @@ void Horde::scout() {
     // instead: the point named a birthplace, not a centre to read a
     // frontier from, so the sweep stops on the first cell the walk
     // reaches at the asked layer - the point itself wherever it stands,
-    // the ground beside it wherever it does not.
+    // the ground beside it wherever it does not. The anchor keeps the
+    // layer it reads there, the other half of the name: whichever floor
+    // the walk likes sooner stands in for a candidate read, never for
+    // the floor the wave rises on.
     std::vector<int> rungs_x, rungs_y, rungs_g;
     // One reading of the anchors and their ranking, leg walk or dig walk
     // by the field it is handed: the dig pass asks the same questions of
@@ -1145,6 +1152,7 @@ void Horde::scout() {
         for (int c = 0; c < Config::kSpawnSites; ++c) {
             anchor_x_[c] = -1;
             anchor_y_[c] = 0;
+            anchor_z_[c] = -1;
             if (c >= pool) continue;
             ask = cfg_.spawn_z[c];
             const int cx = roam_x_[c], cy = roam_y_[c];
@@ -1190,6 +1198,7 @@ void Horde::scout() {
                         if (d >= 0) {
                             anchor_x_[c] = rungs_x[k];
                             anchor_y_[c] = rungs_y[k];
+                            anchor_z_[c] = rungs_g[k];
                             break;
                         }
                         continue;
@@ -1198,6 +1207,7 @@ void Horde::scout() {
                         best_d = d;
                         anchor_x_[c] = rungs_x[k];
                         anchor_y_[c] = rungs_y[k];
+                        anchor_z_[c] = rungs_g[k];
                     }
                 }
                 // The named ground found, the sweep stops here: the
@@ -1337,6 +1347,18 @@ void Horde::place_wave(double now) {
         const int ax = anchor_x_[c], ay = anchor_y_[c];
         s.x = ax;
         s.y = ay;
+        // A map that named its sites named a floor as well: the anchor
+        // holds the site and its own layer the floor, whichever floor
+        // the walk reaches sooner there - a reached roof must not
+        // steal the birth from the rooms the name asked of, and the
+        // road does not walk the wave away from its named ground. The
+        // clearing stays a bonus: the birth scatters where the rooms
+        // have the headroom, the pile is the room they have.
+        if (cfg_.spawn_named && anchor_z_[c] >= 0) {
+            s.z = anchor_z_[c];
+            fill_site(s);
+            return;
+        }
         s.z = ground_of(ax, ay);
         std::vector<RouteCell> road;
         if (trace_route(ax, ay, road)) {

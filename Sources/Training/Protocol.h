@@ -251,11 +251,21 @@ void write_daytime_sky(ByteWriter& bw, uint16_t time);
 // What the walking dead wear, aosprotocol #14's zombie theme: the plain
 // Zombie, whose number it gives as 64. A client that claims the extension
 // draws it from Models/Player/Custom as ZombieGrunt1 to 3 by player id, so a
-// horde has three faces.
+// horde has three faces. The theme counts the brutes up from there: the
+// Spitter, the Leaper, the Caller (whose purple face the healer wears), the
+// Breaker, and the Toppler, whose plain Zombie set dresses the tank until
+// its own model stands.
 constexpr uint8_t kOutfitZombie = 64;
-enum class OutfitSub : uint8_t { TeamOutfits = 1 };
+constexpr uint8_t kOutfitSpitter = 65;
+constexpr uint8_t kOutfitLeaper = 66;
+constexpr uint8_t kOutfitCaller = 67;
+constexpr uint8_t kOutfitBreaker = 68;
+constexpr uint8_t kOutfitToppler = 69;
+enum class OutfitSub : uint8_t { SetOutfit = 0, TeamOutfits = 1 };
 // The whole packet, id included: one team's outfit.
 void write_team_outfit(ByteWriter& bw, uint8_t team, uint8_t outfit);
+// The whole packet, id included: the outfit of one player, worn at once.
+void write_set_outfit(ByteWriter& bw, uint8_t player, uint8_t outfit);
 
 // --- Smoke (extension 0x3F, packet 127) ------------------------------------
 //

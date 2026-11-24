@@ -59,3 +59,45 @@ upgrade2_price = 30
 # The part, in percent, of all a builder sank into a gun that the word
 # taking it down returns.
 turret_refund = 70
+
+# The brutes of the horde, the specials of the waves. Each name reads its
+# own words: the first wave it stands in; the chance by wave and the extra
+# one every so many waves (a brute of the chance), or the pair and trio
+# waves the count of its group grows by (a brute of the count: the tank
+# and the healer); and the Zedcred its kill pays over the grunt rate. The
+# two bullies of the count stand apart before healer_with_tank_wave: one
+# of them a wave, never both.
+
+[specials]
+
+# The Spitter, the green one.
+spitter_first_wave = 3
+spitter_chance = 25
+spitter_extra_every = 10
+spitter_bounty = 5
+
+# The Tank, the blue one. Its own model is to come: it wears the plain
+# Zombie set until then.
+tank_first_wave = 5
+tank_pair_wave = 10
+tank_trio_wave = 20
+tank_bounty = 10
+
+# The Healer, the purple one.
+healer_first_wave = 5
+healer_pair_wave = 10
+healer_trio_wave = 20
+healer_bounty = 8
+healer_with_tank_wave = 30
+
+# The Leaper, the red one.
+leaper_first_wave = 10
+leaper_chance = 40
+leaper_extra_every = 15
+leaper_bounty = 6
+
+# The Breaker, the yellow one.
+breaker_first_wave = 8
+breaker_chance = 60
+breaker_extra_every = 8
+breaker_bounty = 7

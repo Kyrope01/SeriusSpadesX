@@ -491,6 +491,10 @@ struct Player {
     // pays, what a sentry or its raising costs, kept plain on the player.
     int zc = 0;                  // credits in hand
     bool zc_staked = false;      // the purse opened once, at the first rise
+    // One of the walking dead worth more than a grunt wears its own outfit
+    // and pays its own bounty; a grunt wears 64 and pays the rate.
+    uint8_t outfit = 64;         // the outfit the client dresses it with
+    int bounty = 0;              // a special asks it; a grunt pays the rate
 
     bool alive = false;
     int hp = 0;
@@ -657,6 +661,26 @@ struct EconomyTuning {
     int price_step = 2;      // by each pillar the builder already stands
     int upgrade[kTurretLevels - 1] = {10, 30};
     int refund = 70;         // percent back at the word that takes down
+};
+
+// The brutes of the horde, five specials, each its own face and its own
+// toll. A special with a chance set rolls it once a wave for a place, and
+// again every extra_every waves past its first for a second; one with pair
+// waves set stands one from its first wave, two from the pair wave, three
+// from the trio wave. The healer and the tank stand apart until the wave
+// the tuning says, never both on one wave before it. towerdefense.toml
+// says all of it again, by the same word as the table here.
+enum SpecialKind { kSpitter = 0, kTank, kHealer, kLeaper, kBreaker,
+                   kSpecialCount };
+struct SpecialTuning {
+    const char* name = "";
+    int outfit = 64;         // the number the client dresses it with
+    int bounty = 0;          // the Zedcred its kill pays over the grunt rate
+    int first_wave = 0;      // the first wave it may stand in
+    int chance = 0;          // percent by the wave, when it has a chance
+    int extra_every = 0;     // every so many waves a second one may roll
+    int pair_wave = 0;       // its group grows to two from this wave on
+    int trio_wave = 0;       // and to three from this wave on
 };
 
 // One placed gun: a pillar of two real blocks the server aims and fires.
@@ -1236,6 +1260,21 @@ struct Server::Impl {
     std::vector<Turret> turrets;
     TurretTuning turret_cfg;
     EconomyTuning economy;
+    // The five brutes, as the table above reads them; the waves draw the
+    // specials of a wave from it. The tank wears the plain Zombie set as
+    // a placeholder, until its own model stands.
+    SpecialTuning specials[kSpecialCount] = {
+        {"Spitter", 65, 5, 3, 25, 10, 0, 0},
+        {"Tank", 69, 10, 5, 0, 0, 10, 20},
+        {"Healer", 67, 8, 5, 0, 0, 10, 20},
+        {"Leaper", 66, 6, 10, 40, 15, 0, 0},
+        {"Breaker", 68, 7, 8, 60, 8, 0, 0},
+    };
+    int healer_tank_together = 30;  // both bullies stand from this wave on
+    // The specials the wave rides: one rides each due tread, at the place
+    // the tread names, until the queue is spent - the dead of a wave walk
+    // in single file, and a brute walks beside the grunts, not instead.
+    std::vector<int> special_due;
     uint8_t turret_next_id = 1;
     double turret_resend_next = 0.0;
     std::vector<proto::TurretState> turrets_sent;
@@ -1579,8 +1618,9 @@ struct Server::Impl {
             // A walker down pays its bounty to the hand that felled it -
             // the shooter, or the builder of a gun, when the gun spent
             // the round - and nothing to a fall of its own.
+            const int pay = p.bounty > 0 ? p.bounty : economy.per_kill;
             if (by && by != &p && !by->zombie && !by->aim_bot)
-                by->zc += economy.per_kill;
+                by->zc += pay;
             // The pack does not lose its way with a fallen mate: whoever
             // followed it follows whoever it followed.
             const int fallen_ahead = p.ahead_id;
@@ -1815,8 +1855,11 @@ struct Server::Impl {
     }
     // --- the horde ---------------------------------------------------------
     // The brain's body: the players whose walk and fall it counts. A zombie
-    // is a player like a range target is, with no connection behind it.
-    void add_zombie(const horde::SpawnAt& at) {
+    // is a player like a range target is, with no connection behind it. A
+    // special of the wave rides the same tread and the same corner, wearing
+    // its own face and paying its own bounty - the walk itself is the
+    // grunt walk, brute manners to come once the brutes have stood a while.
+    void add_zombie(const horde::SpawnAt& at, int special = -1) {
         int id = -1;
         for (int i = 0; i < kSlots && id < 0; ++i)
             if (!players[i]) id = i;
@@ -1824,13 +1867,20 @@ struct Server::Impl {
             horde->on_zombie_killed();   // nowhere to stand: the wave skipped it
             return;
         }
+        const SpecialTuning* st = nullptr;
+        if (special >= 0 && special < kSpecialCount)
+            st = &specials[static_cast<size_t>(special)];
         auto p = std::make_unique<Player>();
         p->id = id;
         p->named = true;
-        p->name = "Zombie";
+        p->name = st ? st->name : "Zombie";
         p->team = kTargets;
         p->zombie = true;
         p->born_at = world_time;
+        if (st) {
+            p->outfit = static_cast<uint8_t>(st->outfit);
+            p->bounty = st->bounty;
+        }
         // Single file behind its corner's pack: a zombie with nobody to
         // follow is the pack's leader, and reads the field itself.
         const int corner = at.corner;
@@ -1846,6 +1896,21 @@ struct Server::Impl {
         players[id] = std::move(p);
         ++bot_count;
         spawn(*players[id]);
+        if (st)
+            dress_zombie(*players[id]);
+    }
+    // A special wears its own face: told at once to every client that
+    // claimed the outfits, held for one still loading its world. The
+    // plain grunts wear the team word alone and are told nothing here.
+    void dress_zombie(Player& z) {
+        ByteWriter outfits_bytes;
+        proto::write_set_outfit(outfits_bytes,
+                                static_cast<uint8_t>(z.id), z.outfit);
+        for (auto& c : players) {
+            if (!c || !c->ext_outfit || c->zombie || c->aim_bot) continue;
+            if (c->loading) c.saved.push_back(outfits_bytes.data);
+            else send(*c, outfits_bytes);
+        }
     }
     // The fallen keep their slot a moment so their fall is seen, then the rest
     // of the wave may have it.
@@ -1958,6 +2023,43 @@ struct Server::Impl {
                 }
                 continue;
             }
+            if (section == "specials") {
+                // The brutes of the wave, said by their own words: one
+                // table stands, five names read, each field its fence.
+                static const char* const kWords[kSpecialCount] = {
+                    "spitter", "tank", "healer", "leaper", "breaker"};
+                int kind = -1;
+                for (int k = 0; k < kSpecialCount; ++k)
+                    if (key.rfind(kWords[k], 0) == 0) {
+                        kind = k;
+                        break;
+                    }
+                if (kind >= 0) {
+                    // What the key still holds after the name: the field.
+                    const std::string field =
+                        key.substr(std::string(kWords[kind]).size());
+                    SpecialTuning& s = specials[static_cast<size_t>(kind)];
+                    const int n = static_cast<int>(number(value));
+                    if (field == "bounty") {
+                        s.bounty = std::max(0, n);
+                    } else if (field == "first_wave") {
+                        s.first_wave = std::max(1, n);
+                    } else if (field == "chance") {
+                        s.chance = std::min(100, std::max(0, n));
+                    } else if (field == "extra_every") {
+                        s.extra_every = std::max(0, n);
+                    } else if (field == "pair_wave") {
+                        s.pair_wave = std::max(0, n);
+                    } else if (field == "trio_wave") {
+                        s.trio_wave = std::max(0, n);
+                    }
+                } else if (key == "healer_with_tank_wave") {
+                    // The wave the two bullies of the count may share.
+                    healer_tank_together = std::max(
+                        0, static_cast<int>(number(value)));
+                }
+                continue;
+            }
             if (section != "turrets") continue;
             if (key == "range") {
                 turret_cfg.range = std::max(1.0f, static_cast<float>(number(value)));
@@ -1988,6 +2090,13 @@ struct Server::Impl {
             economy.per_kill, economy.start, economy.wave_bonus,
             economy.price_base, economy.price_step,
             economy.upgrade[0], economy.upgrade[1], economy.refund);
+        log("towerdefense.toml: specials first waves %d/%d/%d/%d/%d, "
+            "bounties %d/%d/%d/%d/%d",
+            specials[0].first_wave, specials[1].first_wave,
+            specials[2].first_wave, specials[3].first_wave,
+            specials[4].first_wave, specials[0].bounty,
+            specials[1].bounty, specials[2].bounty, specials[3].bounty,
+            specials[4].bounty);
     }
 
     // One block's worth of the pillar, aired to the clients as the work of
@@ -2351,6 +2460,23 @@ struct Server::Impl {
             reply = "That place would seal the last way in.";
             return;
         }
+        // A new gun is the base price plus the step by each pillar the
+        // builder already stands - a park means the next gun costs -
+        // and a level above the base adds its raisings on top. The toll
+        // is asked before the blocks stand: a purse too thin leaves the
+        // ground as it was, and no half bought pillar stays behind.
+        int owned = 0;
+        for (const Turret& t : turrets)
+            if (t.owner == p.id)
+                ++owned;
+        int price = economy.price_base + economy.price_step * owned;
+        for (int l = 1; l < level; ++l)
+            price += economy.upgrade[l - 1];
+        if (p.zc < price) {
+            reply = "Not enough credits: " + std::to_string(price) +
+                    " asked, " + std::to_string(p.zc) + " in hand.";
+            return;
+        }
         const uint32_t rgb = kTurretColour[static_cast<size_t>(level) - 1];
         turret_colour_said(rgb);
         std::vector<Cell> built;
@@ -2365,21 +2491,6 @@ struct Server::Impl {
         touched(built, true);
         if (built.empty()) {
             reply = "Not enough room above that block.";
-            return;
-        }
-        // A new gun is the base price plus the step by each pillar the
-        // builder already stands - a park means the next gun costs -
-        // and a level above the base adds its raisings on top.
-        int owned = 0;
-        for (const Turret& t : turrets)
-            if (t.owner == p.id)
-                ++owned;
-        int price = economy.price_base + economy.price_step * owned;
-        for (int l = 1; l < level; ++l)
-            price += economy.upgrade[l - 1];
-        if (p.zc < price) {
-            reply = "Not enough credits: " + std::to_string(price) +
-                    " asked, " + std::to_string(p.zc) + " in hand.";
             return;
         }
         // Its name: the next of the wire's own, never one in flight.
@@ -3904,6 +4015,46 @@ struct Server::Impl {
             system_chat("The defeat is called off; the next wave is coming.");
     }
 
+    // The specials a wave stands, drawn at its start from the tuning
+    // tables: one or more brutes queue here and ride the due treads of
+    // the wave, one by one, beside the grunts. The two bullies of the
+    // count, the tank and the healer, stand apart on the waves before
+    // the wave the tuning names: one of them, never both.
+    void plan_specials() {
+        special_due.clear();
+        const int wave = horde->wave();
+        if (horde->placed() == 0)
+            return;   // no way in: a wave that cannot walk holds no brutes
+        for (int k = 0; k < kSpecialCount; ++k) {
+            const SpecialTuning& s = specials[static_cast<size_t>(k)];
+            if (wave < s.first_wave) continue;
+            int want = 0;
+            if (s.chance > 0) {
+                if (std::uniform_int_distribution<int>(0, 99)(rng) <
+                    s.chance)
+                    want = 1;
+                if (s.extra_every > 0 && want > 0 &&
+                    (wave - s.first_wave) % s.extra_every == 0 &&
+                    std::uniform_int_distribution<int>(0, 99)(rng) < s.chance)
+                    ++want;
+            } else {
+                want = 1;
+                if (s.pair_wave > 0 && wave >= s.pair_wave) ++want;
+                if (s.trio_wave > 0 && wave >= s.trio_wave) ++want;
+            }
+            if (k == kHealer && want > 0 && wave < healer_tank_together) {
+                bool tank = false;
+                for (const int j : special_due)
+                    if (j == kTank)
+                        tank = true;
+                if (tank)
+                    want = 0;   // the tank stands: the healer holds this wave
+            }
+            for (int j = 0; j < want; ++j)
+                special_due.push_back(k);
+        }
+    }
+
     // The wave's announcements, its spawns, and its dead slots given back.
     void horde_tick() {
         horde->tick(world_time);
@@ -3929,6 +4080,7 @@ struct Server::Impl {
                             corner_ping_next[k] = 0.0;
                         }
                         route_smoke_next = 0.0;
+                        plan_specials();
                         char text[96];
                         if (horde->placed() == 0) {
                             // The walk priced every corner and none of them
@@ -3940,7 +4092,9 @@ struct Server::Impl {
                                           horde->wave());
                         } else {
                             std::snprintf(text, sizeof text, "Wave %d: %d zombies coming",
-                                          horde->wave(), horde->placed());
+                                          horde->wave(), static_cast<int>(
+                                              horde->placed() +
+                                              special_due.size()));
                         }
                         system_chat(text);
                     }
@@ -4017,6 +4171,12 @@ struct Server::Impl {
                     ping_wave_spawn(s);
                 }
                 add_zombie(s);
+                // A brute of the queue rides the tread beside its grunt,
+                // at the same corner, until the wave tells no more.
+                if (!special_due.empty()) {
+                    add_zombie(s, special_due.front());
+                    special_due.erase(special_due.begin());
+                }
             }
         }
         free_dead_zombies();
@@ -4411,6 +4571,16 @@ struct Server::Impl {
                     // wave the horde raises is one.
                     ByteWriter outfits_bytes;
                     proto::write_team_outfit(outfits_bytes, 1, proto::kOutfitZombie);
+                    // The specials already standing are said again, so a
+                    // latecomer sees the true faces of the wave in progress.
+                    for (auto& z : players) {
+                        if (!z || !z->zombie ||
+                            z->outfit == proto::kOutfitZombie)
+                            continue;
+                        proto::write_set_outfit(
+                            outfits_bytes, static_cast<uint8_t>(z->id),
+                            z->outfit);
+                    }
                     if (p.loading) p.saved.push_back(outfits_bytes.data);
                     else send(p, outfits_bytes);
                 }

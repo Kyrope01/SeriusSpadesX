@@ -218,6 +218,12 @@ constexpr uint32_t kTurretColour[kTurretLevels] = {0x00BE00, 0x008C00, 0x005000}
 // level's own colour goes out before the first block that wears it.
 constexpr uint8_t kTurretBlockId = 255;
 
+// The colour of an acid pool, and the nobody its blocks are painted by:
+// the other free server id, its own word, that the sentry colours never
+// wear.
+constexpr uint32_t kAcidColour = 0x7F000000u | 0x5AFF3Cu;   // acid green
+constexpr uint8_t kAcidBlockId = 254;
+
 // The catch of the pack: a follower runs once its leader stands more than
 // this far ahead. Every heel of the line walks at the same pace as the one
 // it holds, so the ground never closes a gap on its own - whatever a hop, a
@@ -552,6 +558,14 @@ struct Player {
     bool zombie = false;
     double born_at = -1e9;       // when it rose, for the pile's settle window
     double next_bite = 0.0;      // a bite a second once it has one to bite
+    // Which brute this walker stands as, one of SpecialKind, or -1 for a
+    // plain grunt: the wave dressed it, the behaviour reads it.
+    int brute = -1;
+    // A brute stood by the word of a person, not by the wave: it walks
+    // and bites all the same, yet the wave keeps its ledger without it.
+    bool off_ledger = false;
+    // The Spitter clock: when its next breath of acid may leave it.
+    double next_spit = 0.0;
     Vec3 walk_ref{};             // where it last stood, to catch a stuck one
     double walk_ref_at = 0.0;
     double free_slot_at = 0.0;   // dead: when its slot goes back to the wave
@@ -683,6 +697,22 @@ struct SpecialTuning {
     int trio_wave = 0;       // and to three from this wave on
 };
 
+// The breath of the Spitter, as towerdefense.toml says it: how often a
+// spit may leave it, the span it picks its person from and how close is
+// too close for anything but teeth, the lag its aim is read through -
+// where a body stood, not where it stands - the share of a grenade hurt
+// its acid does to people, how long the ground it lands on is held
+// before it melts, and the reach of the pool painted where it lands.
+struct SpitterTuning {
+    double every = 5.0;    // seconds between its spits
+    int range = 30;        // blocks it picks its person from
+    int min_range = 6;     // blocks under which the teeth answer
+    double lag = 0.5;      // seconds back its aim is read at
+    double to_people = 0.15;   // of a grenade hurt on people
+    double melt = 2.5;     // seconds after landing the ground melts
+    int pool = 1;          // blocks around the landing the pool holds
+};
+
 // One placed gun: a pillar of two real blocks the server aims and fires.
 // The blocks are the game's own map - walked on, shot at, torn down like
 // any wall - and the entity is only the server's own play upon them: what
@@ -708,6 +738,7 @@ struct Grenade {
     int team;
     Vec3 pos;
     double explode_at;
+    bool acid = false;   // the breath of a Spitter: a pool, not a crater
 };
 
 struct Server::Impl {
@@ -719,6 +750,27 @@ struct Server::Impl {
     std::mt19937 rng{std::random_device{}()};
     std::array<std::unique_ptr<Player>, kSlots> players{};
     std::vector<Grenade> grenades;
+    // The melts owed: every cell an acid pool holds, booked to come down
+    // when its clock runs out. A fresh world tears the whole host down,
+    // so the queue never outlives the map it was booked against.
+    struct AcidMelt {
+        int x, y, z;
+        double at;
+    };
+    std::vector<AcidMelt> melts;
+    // Where the people were, a ring per slot: a sample every kPastBeat,
+    // held kPastKeep seconds. The lag of a spit reads a place a body
+    // stood this long back, and only the still are caught where they
+    // stood.
+    static constexpr double kPastBeat = 0.1;
+    static constexpr double kPastKeep = 2.0;
+    static constexpr int kPastN = 20;
+    struct PastPlace {
+        double t[kPastN] = {};
+        float x[kPastN] = {}, y[kPastN] = {}, z[kPastN] = {};
+        int head = 0, n = 0;
+    };
+    PastPlace past[kSlots];
     double world_time = 0;      // the physics clock: advanced in fixed ticks
     // When the next world update is due: a deadline, not "a period since the
     // last", so a 60Hz update on a 120Hz loop goes out every second pass.
@@ -1275,6 +1327,7 @@ struct Server::Impl {
     // the tread names, until the queue is spent - the dead of a wave walk
     // in single file, and a brute walks beside the grunts, not instead.
     std::vector<int> special_due;
+    SpitterTuning spitter;
     uint8_t turret_next_id = 1;
     double turret_resend_next = 0.0;
     std::vector<proto::TurretState> turrets_sent;
@@ -1614,7 +1667,10 @@ struct Server::Impl {
     void kill(Player& p, Player* by, int kill_type) {
         if (!p.alive) return;
         if (p.zombie && horde) {
-            horde->on_zombie_killed();
+            // A brute stood off the wave pays no toll of it: the ledger
+            // counts its own walkers alone.
+            if (!p.off_ledger)
+                horde->on_zombie_killed();
             // A walker down pays its bounty to the hand that felled it -
             // the shooter, or the builder of a gun, when the gun spent
             // the round - and nothing to a fall of its own.
@@ -1859,12 +1915,17 @@ struct Server::Impl {
     // special of the wave rides the same tread and the same corner, wearing
     // its own face and paying its own bounty - the walk itself is the
     // grunt walk, brute manners to come once the brutes have stood a while.
-    void add_zombie(const horde::SpawnAt& at, int special = -1) {
+    // The third word hands the walker in off the wave: a brute stood
+    // for a test. It walks and fights the same, and the wave neither
+    // counts its life nor waits on its death.
+    void add_zombie(const horde::SpawnAt& at, int special = -1,
+                    bool off_ledger = false) {
         int id = -1;
         for (int i = 0; i < kSlots && id < 0; ++i)
             if (!players[i]) id = i;
         if (id < 0) {
-            horde->on_zombie_killed();   // nowhere to stand: the wave skipped it
+            if (!off_ledger)
+                horde->on_zombie_killed();   // nowhere to stand: skipped
             return;
         }
         const SpecialTuning* st = nullptr;
@@ -1880,15 +1941,22 @@ struct Server::Impl {
         if (st) {
             p->outfit = static_cast<uint8_t>(st->outfit);
             p->bounty = st->bounty;
+            p->brute = special;
         }
-        // Single file behind its corner's pack: a zombie with nobody to
-        // follow is the pack's leader, and reads the field itself.
+        p->off_ledger = off_ledger;
+        // Single file behind the pack of its corner: a zombie with
+        // nobody to follow is the leader of the pack, and reads the
+        // field itself. A brute stood by hand has no corner and no
+        // pack: it reads the field alone from its first step.
         const int corner = at.corner;
-        p->spawn_corner = corner;
-        const Player* tail =
-            pack_tail[corner] >= 0 ? players[static_cast<size_t>(pack_tail[corner])].get() : nullptr;
+        const Player* tail = nullptr;
+        if (corner >= 0) {
+            p->spawn_corner = corner;
+            if (pack_tail[corner] >= 0)
+                tail = players[static_cast<size_t>(pack_tail[corner])].get();
+            pack_tail[corner] = id;
+        }
         p->ahead_id = (tail && tail->zombie && tail->alive) ? tail->id : -1;
-        pack_tail[corner] = id;
         p->client_info = true;
         p->has_spawn_at = true;
         p->spawn_at = Vec3{static_cast<float>(at.x), static_cast<float>(at.y),
@@ -1908,7 +1976,7 @@ struct Server::Impl {
                                 static_cast<uint8_t>(z.id), z.outfit);
         for (auto& c : players) {
             if (!c || !c->ext_outfit || c->zombie || c->aim_bot) continue;
-            if (c->loading) c.saved.push_back(outfits_bytes.data);
+            if (c->loading) c->saved.push_back(outfits_bytes.data);
             else send(*c, outfits_bytes);
         }
     }
@@ -2052,6 +2120,23 @@ struct Server::Impl {
                         s.pair_wave = std::max(0, n);
                     } else if (field == "trio_wave") {
                         s.trio_wave = std::max(0, n);
+                    } else if (kind == kSpitter && field == "_spit_every") {
+                        spitter.every = std::max(0.1, number(value));
+                    } else if (kind == kSpitter && field == "_spit_range") {
+                        spitter.range = std::max(1, n);
+                    } else if (kind == kSpitter && field == "_spit_min") {
+                        spitter.min_range =
+                            std::min(spitter.range - 1, std::max(0, n));
+                    } else if (kind == kSpitter && field == "_spit_lag") {
+                        spitter.lag = std::min(
+                            std::max(0.0, number(value)), kPastKeep);
+                    } else if (kind == kSpitter &&
+                               field == "_acid_to_people") {
+                        spitter.to_people = std::max(0.0, number(value));
+                    } else if (kind == kSpitter && field == "_acid_melt") {
+                        spitter.melt = std::max(0.0, number(value));
+                    } else if (kind == kSpitter && field == "_acid_pool") {
+                        spitter.pool = std::min(3, std::max(0, n));
                     }
                 } else if (key == "healer_with_tank_wave") {
                     // The wave the two bullies of the count may share.
@@ -2097,6 +2182,11 @@ struct Server::Impl {
             specials[4].first_wave, specials[0].bounty,
             specials[1].bounty, specials[2].bounty, specials[3].bounty,
             specials[4].bounty);
+        log("towerdefense.toml: spitter spit every %.1f, span %d-%d, "
+            "lag %.1f, acid %.2f of a hurt, melts in %.1f, pool %d",
+            static_cast<double>(spitter.every), spitter.range,
+            spitter.min_range, static_cast<double>(spitter.lag),
+            spitter.to_people, spitter.melt, spitter.pool);
     }
 
     // One block's worth of the pillar, aired to the clients as the work of
@@ -2115,6 +2205,27 @@ struct Server::Impl {
         ByteWriter bw;
         bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
         bw.write_u8(kTurretBlockId);
+        bw.write_u8(static_cast<uint8_t>(kBuildBlock));
+        bw.write_i32(x);
+        bw.write_i32(y);
+        bw.write_i32(z);
+        broadcast(bw, true);
+    }
+    // The acid pool words, the same two the sentry pillar colours are
+    // said with: the colour before the builds that wear it, and a build
+    // aired over a standing block repaints it, a loading client keeping
+    // the order it hears them in.
+    void acid_colour_said() {
+        ByteWriter c;
+        c.write_u8(static_cast<uint8_t>(PacketId::SetColor));
+        c.write_u8(kAcidBlockId);
+        write_color(c, kAcidColour);
+        broadcast(c, true);
+    }
+    void acid_block_painted(int x, int y, int z) {
+        ByteWriter bw;
+        bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+        bw.write_u8(kAcidBlockId);
         bw.write_u8(static_cast<uint8_t>(kBuildBlock));
         bw.write_i32(x);
         bw.write_i32(y);
@@ -2574,6 +2685,57 @@ struct Server::Impl {
         std::string reply;
         turret_place(p, level, reply);
         system_chat(reply, p.id);
+    }
+
+    // A brute by the word of a person: the kind named, stood on the
+    // block the crosshair names, dressed as its wave dresses it. A
+    // testing tool first: the wave keeps its own ledger without it, so
+    // its life and its death move no count. Says the kinds when the
+    // word says none.
+    void brute_command(Player& p, const std::string& text) {
+        const std::string word = lowered(text);
+        const std::string rest =
+            trimmed(word.size() < 6 ? word : word.substr(6));
+        int kind = -1;
+        for (int k = 0; k < kSpecialCount; ++k) {
+            const SpecialTuning& s = specials[static_cast<size_t>(k)];
+            if (rest == lowered(std::string(s.name))) kind = k;
+        }
+        if (kind < 0) {
+            std::string list;
+            for (int k = 0; k < kSpecialCount; ++k) {
+                const SpecialTuning& s = specials[static_cast<size_t>(k)];
+                const std::string one = lowered(std::string(s.name));
+                if (k) list += k + 1 < kSpecialCount ? ", " : " or ";
+                list += one;
+            }
+            system_chat("usage: /brute <" + list + ">", p.id);
+            return;
+        }
+        if (!p.alive || !p.playing()) {
+            system_chat("Spawn in before standing a brute up.", p.id);
+            return;
+        }
+        int hx = 0, hy = 0, hz = 0;
+        if (!turret_aim_hit(p, hx, hy, hz)) {
+            system_chat("Aim at a block to stand the brute on.", p.id);
+            return;
+        }
+        if (hz < 2 || hz > 62 || map.solid(hx, hy, hz - 1) ||
+            map.solid(hx, hy, hz - 2)) {
+            system_chat("Not enough room above that block.", p.id);
+            return;
+        }
+        if (core_column_cell(hx, hy, hz - 1) ||
+            core_column_cell(hx, hy, hz - 2)) {
+            system_chat("The core column is not a pedestal.", p.id);
+            return;
+        }
+        const horde::SpawnAt at{hx, hy, hz - 2, world_time, -1};
+        add_zombie(at, kind, true);
+        const std::string stood =
+            lowered(std::string(specials[static_cast<size_t>(kind)].name));
+        system_chat("The " + stood + " stands.", p.id);
     }
 
     // The core's own word: /core x y stands it at a new cell, however the
@@ -3709,6 +3871,86 @@ struct Server::Impl {
             show_swing(p, 0.4);   // the teeth the clients animate
         }
     }
+
+    // The memory of the Spitter: where the people were. A sample every
+    // kPastBeat into the ring of its slot, held kPastKeep, read back at
+    // whatever lag the tuning asks.
+    void remember_place(Player& p) {
+        PastPlace& h = past[p.id];
+        if (h.n > 0 &&
+            world_time - h.t[(h.head + kPastN - 1) % kPastN] < kPastBeat)
+            return;
+        h.t[h.head] = world_time;
+        h.x[h.head] = p.body.pos.x;
+        h.y[h.head] = p.body.pos.y;
+        h.z[h.head] = p.body.pos.z;
+        h.head = (h.head + 1) % kPastN;
+        if (h.n < kPastN) ++h.n;
+    }
+    // The place of a body ago seconds back: the newest sample that is
+    // old enough, read down from the newest, the oldest when none of
+    // them is old enough, and the body itself when none is kept.
+    Vec3 was_at(int id, double ago) const {
+        const Player* p = players[static_cast<size_t>(id)].get();
+        if (!p) return Vec3{};
+        const PastPlace& h = past[id];
+        if (h.n == 0) return p->body.pos;
+        const double want = world_time - ago;
+        for (int i = 1; i <= h.n; ++i) {
+            const int k = (h.head + kPastN - i) % kPastN;
+            if (h.t[k] <= want) return Vec3{h.x[k], h.y[k], h.z[k]};
+        }
+        const int oldest = (h.head + kPastN - h.n) % kPastN;
+        return Vec3{h.x[oldest], h.y[oldest], h.z[oldest]};
+    }
+    // The bite of a Spitter is at range: one breath of acid in an arc,
+    // aimed where its person stood lag seconds back, said at most one
+    // every `every`. The blob is a grenade the clients fly the flight
+    // of themselves, and the landing is the server word alone: a pool
+    // painted green that melts, not a crater that blasts. The teeth
+    // answer anything too close, as any walker.
+    void spitter_tick(Player& p) {
+        if (p.brute != kSpitter || world_time < p.next_spit) return;
+        Player* t = nullptr;
+        float best = static_cast<float>(spitter.range);
+        const float px = p.body.pos.x, py = p.body.pos.y;
+        for (auto& qq : players) {
+            if (!qq || qq->zombie || !qq->alive || qq->team != kPeople)
+                continue;
+            const float dx = qq->body.pos.x - px;
+            const float dy = qq->body.pos.y - py;
+            const float d = std::sqrt(dx * dx + dy * dy);
+            if (d > best) continue;
+            best = d;
+            t = qq.get();
+        }
+        if (!t || best < static_cast<float>(spitter.min_range)) return;
+        const Vec3 aim = was_at(t->id, spitter.lag);
+        const float flight = std::min(1.6f, std::max(0.6f, best / 20.0f));
+        const Vec3 src{px, py, p.body.pos.z + 0.4f};
+        Vec3 vel;
+        vel.x = (aim.x - src.x) / flight;
+        vel.y = (aim.y - src.y) / flight;
+        vel.z = (aim.z - src.z) / flight -
+                0.5f * nade::kGravity * flight;
+        // The server simulates the flight every client will, and lands
+        // the acid where the arc truly ends: a wall the breath meets on
+        // the way eats it at its face, which is the acid at work on a
+        // wall, the fortress line no longer held against it.
+        const nade::Impact at = nade::simulate(&phys_map, src, vel, flight);
+        Grenade g{p.id, p.team, at.pos,
+                  world_time + static_cast<double>(flight)};
+        g.acid = true;
+        grenades.push_back(g);
+        ByteWriter bw;
+        bw.write_u8(static_cast<uint8_t>(PacketId::GrenadePacket));
+        bw.write_u8(static_cast<uint8_t>(p.id));
+        bw.write_f32(flight);
+        bw.write_vec(src);
+        bw.write_vec(vel);
+        broadcast(bw, false);
+        p.next_spit = world_time + spitter.every;
+    }
     // Where a wave comes from, while it comes: the same ping the tutorial's
     // goals use, re-sent for a corner every few seconds it still streams -
     // one marker at the pack's spawn, held long enough to be walked to,
@@ -4395,6 +4637,8 @@ struct Server::Impl {
                 }
             }
             keep_stocked(p);
+            if (tower_defense_mode() && p.peer && p.alive && !p.zombie)
+                remember_place(p);
             p.input.holding_gun = p.tool == kToolWeapon;
             p.input.secondary_fire = p.secondary;
             const physics::StepResult r = physics::step(phys_map, p.body, p.input, dt);
@@ -4405,6 +4649,7 @@ struct Server::Impl {
                 set_hp(p, p.hp - r.fall_damage, nullptr, kFallKill, nullptr);
             if (!p.alive) continue;
             if (p.zombie) zombie_bite(p);
+            if (p.zombie) spitter_tick(p);
             if (p.body.pos.z > 64.0f || !finite3(p.body.pos)) kill(p, nullptr, kFallKill);
         }
         if (aim_mode()) aim_tick(dt);
@@ -4425,9 +4670,14 @@ struct Server::Impl {
                 ++i;
             }
         }
+        acid_melt_tick();
     }
 
     void explode(const Grenade& g) {
+        if (g.acid) {
+            acid_explode(g);
+            return;
+        }
         Player* owner = players[g.owner].get();
         if (!owner || !owner->named || owner->team != g.team || owner->spectator()) return;
         const Vec3& pos = g.pos;
@@ -4458,6 +4708,81 @@ struct Server::Impl {
         bw.write_i32(y);
         bw.write_i32(z);
         broadcast(bw, true);
+    }
+
+    // The landing of the acid: a share of a grenade hurt on the people
+    // around it - the wall between saves them, blast_damage says - a
+    // pool painted green where it touches ground, and every cell of
+    // the pool booked to melt when its clock runs out. The core column
+    // it does not touch.
+    void acid_explode(const Grenade& g) {
+        Player* owner = players[static_cast<size_t>(g.owner)].get();
+        if (!owner || !owner->named || owner->team != g.team) return;
+        const Vec3& pos = g.pos;
+        if (pos.x < 0 || pos.x > 512 || pos.y < 0 || pos.y > 512 ||
+            pos.z < 0 || pos.z > 63) return;
+        for (auto& pp : players) {
+            if (!pp || !pp->alive || pp->zombie || pp->team != kPeople)
+                continue;
+            const float blunt =
+                nade::blast_damage(&phys_map, pos, pp->body.pos);
+            const int hurt = static_cast<int>(
+                blunt * static_cast<float>(spitter.to_people));
+            if (hurt > 0)
+                set_hp(*pp, pp->hp - hurt, owner, kGrenadeKill, &pos);
+        }
+        const int x = static_cast<int>(std::floor(pos.x));
+        const int y = static_cast<int>(std::floor(pos.y));
+        const int z = static_cast<int>(std::floor(pos.z));
+        // The pool: the cells it lands in, the one under them, one ring
+        // more around for each block of reach.
+        std::vector<Cell> pool;
+        for (int dx = -spitter.pool; dx <= spitter.pool; ++dx)
+            for (int dy = -spitter.pool; dy <= spitter.pool; ++dy)
+                for (int dz = 0; dz <= 1; ++dz) {
+                    const int cx = x + dx, cy = y + dy, cz = z + dz;
+                    if (!VoxelMap::valid(cx, cy, cz) ||
+                        !map.solid(cx, cy, cz))
+                        continue;
+                    if (core_column_cell(cx, cy, cz)) continue;
+                    pool.push_back(Cell{cx, cy, cz});
+                }
+        if (pool.empty()) return;
+        acid_colour_said();
+        for (const Cell& c : pool) {
+            map.set(c.x, c.y, c.z, kAcidColour);
+            acid_block_painted(c.x, c.y, c.z);
+            melts.push_back(
+                AcidMelt{c.x, c.y, c.z, world_time + spitter.melt});
+        }
+    }
+    // The melts come due, a cell a pass of the tick: the block leaves
+    // by the hand of the acid nobody, the map edit told to the march
+    // and the loading clients the way any dig is.
+    void acid_melt_tick() {
+        for (size_t i = 0; i < melts.size();) {
+            if (world_time < melts[i].at) {
+                ++i;
+                continue;
+            }
+            const AcidMelt m = melts[i];
+            melts.erase(melts.begin() + static_cast<long>(i));
+            if (!VoxelMap::valid(m.x, m.y, m.z) ||
+                !map.solid(m.x, m.y, m.z))
+                continue;
+            if (core_column_cell(m.x, m.y, m.z)) continue;
+            ByteWriter bw;
+            bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+            bw.write_u8(kAcidBlockId);
+            bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
+            bw.write_i32(m.x);
+            bw.write_i32(m.y);
+            bw.write_i32(m.z);
+            broadcast(bw, true);
+            std::vector<Cell> removed;
+            map.destroy_point(m.x, m.y, m.z, &removed);
+            touched(removed, false);
+        }
     }
 
     void world_update() {
@@ -5250,6 +5575,9 @@ struct Server::Impl {
             else if (tower_defense_mode() &&
                      (text.rfind("/turret", 0) == 0 || text.rfind("/sentry", 0) == 0)) {
                 turret_command(p, text);
+            } else if (tower_defense_mode() &&
+                       text.rfind("/brute", 0) == 0) {
+                brute_command(p, text);
             } else if (tower_defense_mode() && text.rfind("/core", 0) == 0) {
                 core_command(p, text);
             } else if (tower_defense_mode() &&
@@ -5257,7 +5585,7 @@ struct Server::Impl {
                 map_advance_command(p);
             } else if (tower_defense_mode())
                 system_chat("Commands here: /clearwave, /kill, /turret, "
-                            "/core, /money, /va", p.id);
+                            "/core, /money, /va, /brute", p.id);
             else system_chat(aim_mode() ? "Commands here: /restart, /kill"
                                         : "Commands here: /kill", p.id);
             return;

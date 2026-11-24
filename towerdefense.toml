@@ -70,11 +70,23 @@ turret_refund = 70
 
 [specials]
 
-# The Spitter, the green one.
+# The Spitter, the green one. Its spit is a breath of acid in an arc,
+# aimed where its person stood spit_lag seconds back: the still are
+# soaked where they stand, the moving walk out of the landing. The acid
+# hurts people for acid_to_people of a grenade hurt, paints a green pool
+# where it lands acid_pool blocks around, and the ground there melts
+# away acid_melt seconds after.
 spitter_first_wave = 3
 spitter_chance = 25
 spitter_extra_every = 10
 spitter_bounty = 5
+spitter_spit_every = 5.0
+spitter_spit_range = 30
+spitter_spit_min = 6
+spitter_spit_lag = 0.5
+spitter_acid_to_people = 0.15
+spitter_acid_melt = 2.5
+spitter_acid_pool = 1
 
 # The Tank, the blue one. Its own model is to come: it wears the plain
 # Zombie set until then.

@@ -206,8 +206,8 @@ namespace spades {
 				// stands the old road: the course, shipped in the paks, and
 				// behind it the generated one.
 				if (run.mode == training::Mode::Horde && !hordeMap.empty() &&
-				    spades::FileManager::FileExists(hordeMap)) {
-					cfg.map_data = spades::FileManager::ReadAllBytes(hordeMap);
+				    spades::FileManager::FileExists(hordeMap.c_str())) {
+					cfg.map_data = spades::FileManager::ReadAllBytes(hordeMap.c_str());
 					cfg.map_name = hordeMap;
 					std::string side = hordeMap;
 					const size_t slash = side.rfind('/');
@@ -215,8 +215,9 @@ namespace spades {
 					if (dot != std::string::npos &&
 					    (slash == std::string::npos || dot > slash))
 						side = side.substr(0, dot) + ".txt";
-					if (spades::FileManager::FileExists(side))
-						cfg.map_settings = spades::FileManager::ReadAllBytes(side);
+					if (spades::FileManager::FileExists(side.c_str()))
+						cfg.map_settings =
+						    spades::FileManager::ReadAllBytes(side.c_str());
 					SPLog("[Training] the named map %s rides the game files",
 					      hordeMap.c_str());
 				} else if (run.mode == training::Mode::Horde && hordeMap.empty() &&

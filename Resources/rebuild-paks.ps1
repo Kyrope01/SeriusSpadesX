@@ -16,8 +16,10 @@
 #   3. creates <GameDir>\UserResources if absent: the game then runs in its
 #      portable mode, its settings and logs beside the exe too - nothing is
 #      ever written to AppData;
-#   4. prints what the fresh paks carry (the horde's map, models and sounds),
-#      so a missing asset is seen here, not mid-game.
+#   4. prints that the fresh paks stay clean of the tower defense assets;
+#      the mode's maps, turret models and sounds travel in the player's
+#      own pak, and a file that rode a game pak by mistake is seen here,
+#      not mid-game.
 # This script itself never reads or writes AppData. When the old AppData
 # spot holds paks of an earlier install, the game looks there first and they
 # win over these: they are reported below and left for a hand to remove.
@@ -97,8 +99,8 @@ if (-not (Test-Path -LiteralPath $User)) {
     Write-Host "== UserResources created: the game runs portable - settings and" -ForegroundColor Yellow
     Write-Host "   logs live beside the exe, AppData is never touched." -ForegroundColor Yellow
     Write-Host "   Settings start from their defaults there (cg_towerDefenseMap"
-    Write-Host "   is empty, which plays the shipped Termina Fields); tune the"
-    Write-Host "   rest in the console."
+    Write-Host "   is empty); the mode plays the TD map the game files carry,"
+    Write-Host "   else the generated course. Tune the rest in the console."
 }
 
 # Old paks in the AppData spot would take precedence over these. They are
@@ -126,19 +128,19 @@ ForEach ($Name in @("pak002-Base.pak", "pak005-Models.pak")) {
     $Zip.Dispose()
     if ($Name -eq "pak002-Base.pak") {
         $Snd = @($Entries | Where-Object { $_ -like "Sounds/Turrets/*" }).Count
-        $SndS = "sounds for the turret guns: " + $Snd + " files (13 expected)"
-        if ($Snd -eq 13) { $SndS = $SndS + " OK" } else { $SndS = $SndS + " - CHECK" }
+        $SndS = "tower defense sounds: " + $Snd + " files (0 expected; the player pak carries them)"
+        if ($Snd -eq 0) { $SndS = $SndS + " OK" } else { $SndS = $SndS + " - CHECK" }
         Write-Host ("   " + $Name + ": " + $SndS)
     } else {
         $Map = $Entries -contains "Maps/Termina_FieldsTD.vxl"
         $Txt = $Entries -contains "Maps/Termina_FieldsTD.txt"
         $Kv6 = @($Entries | Where-Object { $_ -like "Models/Turrets/*.kv6" }).Count
-        $Report = "map: "
-        if ($Map) { $Report = $Report + "present" } else { $Report = $Report + "MISSING" }
+        $Report = "tower defense map: "
+        if ($Map) { $Report = $Report + "PRESENT" } else { $Report = $Report + "absent" }
         $Report = $Report + ", settings txt: "
-        if ($Txt) { $Report = $Report + "present" } else { $Report = $Report + "MISSING" }
-        $Report = $Report + ", turret models: " + $Kv6 + " files (6 expected, or 5 without the level-3 barrels)"
-        if ($Kv6 -ge 5) { $Report = $Report + " OK" } else { $Report = $Report + " - CHECK" }
+        if ($Txt) { $Report = $Report + "PRESENT" } else { $Report = $Report + "absent" }
+        $Report = $Report + ", turret models: " + $Kv6 + " files (0 expected; the player pak carries them)"
+        if ((-not $Map) -and (-not $Txt) -and ($Kv6 -eq 0)) { $Report = $Report + " OK" } else { $Report = $Report + " - CHECK" }
         Write-Host ("   " + $Name + ": " + $Report)
     }
 }

@@ -55,7 +55,7 @@
 // error.
 //
 // --- Primary stats (the LOCAL mode's toy gun scales from these; the
-//     server's own stats live in its horde.toml) ---
+//     the stats of the live server sit in towerdefense.toml) ---
 DEFINE_SPADES_SETTING(cg_sentryRange, "48");          // local scan range, blocks
 DEFINE_SPADES_SETTING(cg_sentryFireInterval, "0.50"); // local fire interval base, s
 DEFINE_SPADES_SETTING(cg_sentryAimPitch, "1");        // local mode: 0 = level gun

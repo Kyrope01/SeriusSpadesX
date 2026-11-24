@@ -96,8 +96,9 @@ if (-not (Test-Path -LiteralPath $User)) {
     New-Item -ItemType Directory -Path $User | Out-Null
     Write-Host "== UserResources created: the game runs portable - settings and" -ForegroundColor Yellow
     Write-Host "   logs live beside the exe, AppData is never touched." -ForegroundColor Yellow
-    Write-Host "   Settings start from their defaults there (cg_hordeMap is empty,"
-    Write-Host "   which plays the shipped Termina Fields); tune the rest in the console."
+    Write-Host "   Settings start from their defaults there (cg_towerDefenseMap"
+    Write-Host "   is empty, which plays the shipped Termina Fields); tune the"
+    Write-Host "   rest in the console."
 }
 
 # Old paks in the AppData spot would take precedence over these. They are

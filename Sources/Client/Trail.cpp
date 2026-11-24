@@ -39,25 +39,25 @@ namespace spades {
 
 	// The whole way: the master switch, for a headset that must draw every
 	// world twice and would rather its frame went to the dead it can see.
-	DEFINE_SPADES_SETTING(cg_hordeTrails, "1");
+	DEFINE_SPADES_SETTING(cg_towerDefenseTrails, "1");
 	// Blocks between crumbs at the eye; the farther out the line runs, the
 	// wider the crumbs are spaced (see Draw), so the setting sets the busy
 	// ground's density alone.
-	DEFINE_SPADES_SETTING(cg_hordeTrailSpacing, "2.0");
+	DEFINE_SPADES_SETTING(cg_towerDefenseTrailSpacing, "2.0");
 	// A crumb's whole size, in blocks: a knot small enough to read as a
 	// dotted line from the stand, big enough to find again.
-	DEFINE_SPADES_SETTING(cg_hordeTrailSize, "0.4");
+	DEFINE_SPADES_SETTING(cg_towerDefenseTrailSize, "0.4");
 	// How solid a crumb stands; they do not shade or cast, so this is all
 	// there is to their look.
-	DEFINE_SPADES_SETTING(cg_hordeTrailOpacity, "0.85");
+	DEFINE_SPADES_SETTING(cg_towerDefenseTrailOpacity, "0.85");
 	// 0: the ways are drawn where the world hides them not at all; 1: the
 	// crumbs also ghost through the terrain, a way in underground read
 	// from above it. Doubles the crumbs drawn; off by default.
-	DEFINE_SPADES_SETTING(cg_hordeTrailThrough, "0");
+	DEFINE_SPADES_SETTING(cg_towerDefenseTrailThrough, "0");
 	// The pace the ways walk, in lengths a second: a crumb reaches its
 	// neighbour's place once a period, and the line reads as what it
 	// stands for - the wave, coming in. 0 and the ways stand still.
-	DEFINE_SPADES_SETTING(cg_hordeTrailFlow, "1.0");
+	DEFINE_SPADES_SETTING(cg_towerDefenseTrailFlow, "1.0");
 
 	void TrailLayer::SetPath(uint8_t front, const Vector3& color, std::vector<Vector3> crumbs) {
 		if (paths.size() <= front)
@@ -78,7 +78,7 @@ namespace spades {
 	}
 
 	void TrailLayer::Draw(IRenderer& renderer, const Vector3& viewOrigin) {
-		if ((int)cg_hordeTrails == 0)
+		if ((int)cg_towerDefenseTrails == 0)
 			return;
 
 		// The one thing a crumb is: looked for once, and its absence - a
@@ -97,14 +97,17 @@ namespace spades {
 
 		// What a look is worth telling: a spacing set low (or to zero, the
 		// setting taken at its floor) turns a hint to a ribbon.
-		float spacing = static_cast<float>(cg_hordeTrailSpacing);
+		float spacing = static_cast<float>(cg_towerDefenseTrailSpacing);
 		if (!(spacing >= 0.5F))
 			spacing = 0.5F;
-		const float size = std::max(0.05F, static_cast<float>(cg_hordeTrailSize));
+		const float size =
+		    std::max(0.05F, static_cast<float>(cg_towerDefenseTrailSize));
 		const float opacity =
-		  std::max(0.05F, std::min(1.0F, static_cast<float>(cg_hordeTrailOpacity)));
-		const bool through = (int)cg_hordeTrailThrough != 0;
-		const float flow = std::max(0.0F, static_cast<float>(cg_hordeTrailFlow));
+		  std::max(0.05F, std::min(1.0F,
+		             static_cast<float>(cg_towerDefenseTrailOpacity)));
+		const bool through = (int)cg_towerDefenseTrailThrough != 0;
+		const float flow = std::max(0.0F,
+		    static_cast<float>(cg_towerDefenseTrailFlow));
 
 		// The clock the ways walk by is this side's own: no packet and no
 		// server keeps it, for the walk is a look alone - the line means

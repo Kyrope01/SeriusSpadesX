@@ -724,9 +724,9 @@ namespace spades {
 				label(_Tr("MainScreen", "Tower Defense: waves of the walking dead,"
 								                        " marching on a core you defend"), 26.0F,
 				      MakeVector4(0.45F, 0.85F, 0.45F, 1.0F));
-				hordeButton = button(x, bw, [this] { StartHorde(); });
+				towerDefenseButton = button(x, bw, [this] { StartTowerDefense(); });
 				y += bh + gap;
-				hordePickButton = button(x, bw, [this] { PickHordeMap(); });
+				towerDefensePickButton = button(x, bw, [this] { PickTowerDefenseMap(); });
 				y += bh + gap;
 				ui::Button* back = button(x, bw, [this] { ShowHome(); });
 				back->caption = _Tr("MainScreen", "Back");
@@ -818,7 +818,7 @@ namespace spades {
 		}
 
 		/** The short name of a map resource: no folder, no suffix. */
-		static std::string HordeMapName(const std::string& map) {
+		static std::string TowerDefenseMapName(const std::string& map) {
 			std::string base = map;
 			const size_t slash = base.rfind('/');
 			if (slash != std::string::npos)
@@ -877,13 +877,13 @@ namespace spades {
 			highlightButton->caption = (int)cg_aimHighlight
 			                             ? _Tr("MainScreen", "Highlight targets: on")
 			                             : _Tr("MainScreen", "Highlight targets: off");
-			if (hordeButton)
-				hordeButton->caption = _Tr("MainScreen", "Tower Defense");
-			if (hordePickButton) {
-				const std::string map = TrainingHost::GetHordeMap();
-				hordePickButton->caption = _Tr("MainScreen", "Map") + ": " +
+			if (towerDefenseButton)
+				towerDefenseButton->caption = _Tr("MainScreen", "Tower Defense");
+			if (towerDefensePickButton) {
+				const std::string map = TrainingHost::GetTowerDefenseMap();
+				towerDefensePickButton->caption = _Tr("MainScreen", "Map") + ": " +
 				    (map.empty() ? _Tr("MainScreen", "the mode course, Termina Fields")
-				                 : HordeMapName(map));
+				                 : TowerDefenseMapName(map));
 			}
 		}
 
@@ -897,31 +897,31 @@ namespace spades {
 			StartTraining(launch);
 		}
 
-		void MainScreenMainMenu::StartHorde() {
+		void MainScreenMainMenu::StartTowerDefense() {
 			TrainingHost::Launch launch;
-			launch.mode = training::Mode::Horde;
+			launch.mode = training::Mode::TowerDefense;
 			StartTraining(launch);
 		}
 
-		void MainScreenMainMenu::PickHordeMap() {
+		void MainScreenMainMenu::PickTowerDefenseMap() {
 			const std::vector<std::string> roster = TrainingHost::MapRoster();
 			std::vector<std::string> items;
 			items.push_back(_Tr("MainScreen", "the mode course, Termina Fields"));
 			for (const std::string& map : roster)
-				items.push_back(HordeMapName(map));
-			const std::string current = TrainingHost::GetHordeMap();
+				items.push_back(TowerDefenseMapName(map));
+			const std::string current = TrainingHost::GetTowerDefenseMap();
 			int selected = 0;
 			for (int i = 0; i < (int)roster.size(); i++)
 				if (roster[i] == current)
 					selected = i + 1;
-			ui::ShowDropDownList(*hordePickButton, std::move(items),
+			ui::ShowDropDownList(*towerDefensePickButton, std::move(items),
 			                     [this, roster](int index) {
 				                     if (index < 0)
 					                     return; // dismissed
 				                     if (index == 0)
-					                     TrainingHost::SetHordeMap("");
+					                     TrainingHost::SetTowerDefenseMap("");
 				                     else if (index - 1 < (int)roster.size())
-						                     TrainingHost::SetHordeMap(roster[index - 1]);
+						                     TrainingHost::SetTowerDefenseMap(roster[index - 1]);
 				                     RefreshTrainingPanel();
 			                     }, selected);
 		}

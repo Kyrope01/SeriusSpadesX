@@ -37,9 +37,9 @@ DEFINE_SPADES_SETTING(cg_localPort, "32890");
 // whose paks lost it - and the cell the core stands on (moved to the
 // nearest land when that is at sea; the map's own settings .txt names
 // another cell, and its word outranks these).
-DEFINE_SPADES_SETTING(cg_hordeMap, "");
-DEFINE_SPADES_SETTING(cg_hordeCoreX, "256");
-DEFINE_SPADES_SETTING(cg_hordeCoreY, "256");
+DEFINE_SPADES_SETTING(cg_towerDefenseMap, "");
+DEFINE_SPADES_SETTING(cg_towerDefenseCoreX, "256");
+DEFINE_SPADES_SETTING(cg_towerDefenseCoreY, "256");
 
 namespace spades {
 	namespace gui {
@@ -51,8 +51,8 @@ namespace spades {
 			std::atomic<bool> stop{false};
 			std::thread thread;
 			std::shared_ptr<training::AimShared> aim = std::make_shared<training::AimShared>();
-			std::shared_ptr<training::HordeShared> horde =
-			    std::make_shared<training::HordeShared>();
+			std::shared_ptr<training::TowerDefenseShared> tower_defense =
+			    std::make_shared<training::TowerDefenseShared>();
 
 			void Join() {
 				if (thread.joinable()) {
@@ -131,34 +131,36 @@ namespace spades {
 			return maps;
 		}
 
-		std::string TrainingHost::GetHordeMap() { return (std::string)cg_hordeMap; }
+		std::string TrainingHost::GetTowerDefenseMap() { return
+		    (std::string)cg_towerDefenseMap; }
 
-		void TrainingHost::SetHordeMap(const std::string& map) { cg_hordeMap = map; }
+		void TrainingHost::SetTowerDefenseMap(const std::string& map)
+		{ cg_towerDefenseMap = map; }
 
 		std::string TrainingHost::Start(const Launch& what) {
 			Stop();
 			launch = what;
 			// /va asked for the map after this one while the last run stood:
 			// answered here, where the next run takes its map from.
-			if (what.mode == training::Mode::Horde) {
+			if (what.mode == training::Mode::TowerDefense) {
 				bool advance = false;
 				{
-					std::lock_guard<std::mutex> lock(impl->horde->mutex);
-					advance = impl->horde->map_advance;
-					impl->horde->map_advance = false;
+					std::lock_guard<std::mutex> lock(impl->tower_defense->mutex);
+					advance = impl->tower_defense->map_advance;
+					impl->tower_defense->map_advance = false;
 				}
 				if (advance) {
 					const std::vector<std::string> roster = MapRoster();
 					const int n = static_cast<int>(roster.size());
 					if (n > 0) {
-						const std::string current = (std::string)cg_hordeMap;
+						const std::string current = (std::string)cg_towerDefenseMap;
 						int at = -1;
 						for (int i = 0; i < n; i++)
 							if (roster[i] == current)
 								at = i;
 						const std::string next = roster[(at + 1) % n];
 						SPLog("[Training] map advance: the next map is %s", next.c_str());
-						SetHordeMap(next);
+						SetTowerDefenseMap(next);
 					}
 				}
 			}
@@ -183,21 +185,23 @@ namespace spades {
 			Impl* self = impl.get();
 			const int listenPort = port;
 			const Launch run = what;
-			const std::string hordeMap = (std::string)cg_hordeMap;
-			const std::vector<std::string> hordeRoster = MapRoster();
-			const int hordeCoreX = (int)cg_hordeCoreX, hordeCoreY = (int)cg_hordeCoreY;
-			impl->thread = std::thread([self, listenPort, run, hordeMap, hordeRoster,
-			                            hordeCoreX, hordeCoreY]() {
+			const std::string towerDefenseMap = (std::string)cg_towerDefenseMap;
+			const std::vector<std::string> towerDefenseRoster = MapRoster();
+			const int towerDefenseCoreX = (int)cg_towerDefenseCoreX,
+			    towerDefenseCoreY = (int)cg_towerDefenseCoreY;
+			impl->thread = std::thread([self, listenPort, run, towerDefenseMap,
+			                            towerDefenseRoster, towerDefenseCoreX,
+			                            towerDefenseCoreY]() {
 				host::HostConfig cfg;
 				cfg.port = static_cast<uint16_t>(listenPort);
 				cfg.mode = run.mode;
 				cfg.scenario = run.scenario;
 				cfg.highlight_targets = run.highlight;
-				cfg.map_file = hordeMap;
-				cfg.map_roster = hordeRoster;
-				cfg.horde = self->horde;
-				cfg.core_x = hordeCoreX;
-				cfg.core_y = hordeCoreY;
+				cfg.map_file = towerDefenseMap;
+				cfg.map_roster = towerDefenseRoster;
+				cfg.tower_defense = self->tower_defense;
+				cfg.core_x = towerDefenseCoreX;
+				cfg.core_y = towerDefenseCoreY;
 				// A map the Maps folder carries is played as a resource, read
 				// the same way every other asset is read - its settings .txt
 				// beside it too, and the server logs it by name. The setting
@@ -205,11 +209,13 @@ namespace spades {
 				// to map_file above, and a world with neither of them still
 				// stands the old road: the course, shipped in the paks, and
 				// behind it the generated one.
-				if (run.mode == training::Mode::Horde && !hordeMap.empty() &&
-				    spades::FileManager::FileExists(hordeMap.c_str())) {
-					cfg.map_data = spades::FileManager::ReadAllBytes(hordeMap.c_str());
-					cfg.map_name = hordeMap;
-					std::string side = hordeMap;
+				if (run.mode == training::Mode::TowerDefense &&
+				    !towerDefenseMap.empty() &&
+				    spades::FileManager::FileExists(towerDefenseMap.c_str())) {
+					cfg.map_data =
+					    spades::FileManager::ReadAllBytes(towerDefenseMap.c_str());
+					cfg.map_name = towerDefenseMap;
+					std::string side = towerDefenseMap;
 					const size_t slash = side.rfind('/');
 					const size_t dot = side.rfind('.');
 					if (dot != std::string::npos &&
@@ -219,15 +225,17 @@ namespace spades {
 						cfg.map_settings =
 						    spades::FileManager::ReadAllBytes(side.c_str());
 					SPLog("[Training] the named map %s rides the game files",
-					      hordeMap.c_str());
-				} else if (run.mode == training::Mode::Horde && hordeMap.empty() &&
+					      towerDefenseMap.c_str());
+				} else if (run.mode == training::Mode::TowerDefense &&
+				    towerDefenseMap.empty() &&
 				    spades::FileManager::FileExists("Maps/Termina_FieldsTD.vxl")) {
 					cfg.map_data = spades::FileManager::ReadAllBytes("Maps/Termina_FieldsTD.vxl");
 					if (spades::FileManager::FileExists("Maps/Termina_FieldsTD.txt"))
 						cfg.map_settings =
 						    spades::FileManager::ReadAllBytes("Maps/Termina_FieldsTD.txt");
-					SPLog("[Training] the horde plays the shipped Termina Fields");
-				} else if (run.mode == training::Mode::Horde && hordeMap.empty()) {
+					SPLog("[Training] the tower defense plays the shipped Termina Fields");
+				} else if (run.mode == training::Mode::TowerDefense &&
+				    towerDefenseMap.empty()) {
 					// The paks carry the course with the game (Resources/mkpak
 					// packs Maps into pak005); an install whose paks are stale
 					// says so here instead of quietly standing the generated

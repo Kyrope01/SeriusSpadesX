@@ -290,9 +290,9 @@ uint32_t heel_stamp() {
     return n;
 }
 
-// horde.toml's own small mercies: a line's whitespace off both ends, and a
-// word folded to lower case, so a file the host writes reads the same
-// whatever hand it was written with.
+// towerdefense.toml: its own few mercies - the whitespace of a line
+// off both ends, and a word folded to lower case, so a file the host
+// writes reads the same whatever hand it was written with.
 static std::string trimmed(std::string s) {
     const size_t a = s.find_first_not_of(" \t\r");
     if (a == std::string::npos) return {};
@@ -625,10 +625,11 @@ struct Player {
     bool playing() const { return named && (team == 0 || team == 1); }
 };
 
-// The sentry guns' tuning, as the host's horde.toml says it: how far a gun
-// can see, how often it looks around, how far off the eye the ground may
-// be to found a gun on, and for each level the damage a shot does and the
-// seconds between shots. The defaults are the machine gun family's own.
+// The tuning of the sentry guns, as the towerdefense.toml of the host
+// says it: the sight of a gun, how often it looks around, the distance
+// off the eye the ground may be to found a gun on, and for each level
+// the damage a shot does and the seconds between shots; the defaults
+// are those of the machine gun family.
 // The sentry family walks the classes of the real guns: the light SMG
 // that bodies the base gun, its raising to the MG, and at last the
 // spinning Minigun - a level buys weight of round or rate of fire,
@@ -646,7 +647,7 @@ struct TurretTuning {
 // a bonus on top, and a sentry is bought and raised with it. A new gun
 // climbs a flat step by each pillar standing already - the park stays
 // buyable as long as the game runs - and a raising is a fixed price the
-// park never touches. horde.toml says all of it again, by the same word
+// park never touches. towerdefense.toml says all of it again, by the same word
 // as the tables above.
 struct EconomyTuning {
     int per_kill = 1;        // the bounty of a grunt; specials ask more
@@ -777,12 +778,12 @@ struct Server::Impl {
     }
 
     // --- the map ----------------------------------------------------------
-    // The horde's map: the .vxl the settings name, the one the game itself
-    // carries, or the built course. The settings .txt the map calls its own
-    // is read beside whichever of the two it was, the mode's own maps
-    // shipping their parameters in it.
+    // The map of the tower defense: the .vxl the settings name, the one
+    // the game itself carries, or the built course. The settings .txt a
+    // map calls its own is read beside whichever of the two it was;
+    // the maps of the mode ship their parameters in it.
     bool load_map(std::string& err) {
-        if (horde_mode() && !cfg.map_data.empty()) {
+        if (tower_defense_mode() && !cfg.map_data.empty()) {
             if (!map.load_vxl(reinterpret_cast<const uint8_t*>(cfg.map_data.data()),
                               cfg.map_data.size(), err))
                 return false;
@@ -793,7 +794,7 @@ struct Server::Impl {
             map.to_solid_map(phys_map);
             return true;
         }
-        if (horde_mode() && !cfg.map_file.empty()) {
+        if (tower_defense_mode() && !cfg.map_file.empty()) {
             std::ifstream in(cfg.map_file, std::ios::binary);
             if (!in) {
                 err = "cannot open the map file: " + cfg.map_file;
@@ -811,8 +812,8 @@ struct Server::Impl {
             // a path the eye believes in and a path the game really opens
             // are two different things, and a settings file the game cannot
             // see reads like settings that were never there.
-            log("the horde plays the map at <%s>, the settings beside it "
-                "at <%s>",
+            log("the tower defense plays the map at <%s>, the settings "
+                "beside it at <%s>",
                 cfg.map_file.c_str(), side.c_str());
             std::ifstream txt(side, std::ios::binary);
             if (txt) {
@@ -1104,12 +1105,14 @@ struct Server::Impl {
         }
     }
     bool aim_mode() const { return cfg.mode == training::Mode::Aim; }
-    bool horde_mode() const { return cfg.mode == training::Mode::Horde; }
+    bool tower_defense_mode() const {
+        return cfg.mode == training::Mode::TowerDefense;
+    }
     // The core's column, built at the start: the cells out of the ground it
     // stands on, and the ground cell it stands over, which all belong to it.
     int core_top_z = 0, core_ground_z = 0, core_height = 3;
     bool core_column_cell(int x, int y, int z) const {
-        if (!horde_mode()) return false;
+        if (!tower_defense_mode()) return false;
         if (x != horde_cfg.core_x || y != horde_cfg.core_y) return false;
         return z >= core_top_z && z <= core_ground_z - 1;
     }
@@ -1329,8 +1332,8 @@ struct Server::Impl {
         write_color(bw, team_color[0]);
         write_color(bw, team_color[1]);
         bw.write_fixed_string("Blue", 10);
-        bw.write_fixed_string(horde_mode() ? "Zombies" : "Green", 10);
-        if (horde_mode()) {
+        bw.write_fixed_string(tower_defense_mode() ? "Zombies" : "Green", 10);
+        if (tower_defense_mode()) {
             bw.write_u8(0);                    // Capture the Flag
             bw.write_u8(0);                    // captures: team 0
             bw.write_u8(0);                    // captures: the horde
@@ -1482,7 +1485,7 @@ struct Server::Impl {
     Vec3 spawn_location(Player& p) {
         if (p.zombie && p.has_spawn_at) return p.spawn_at;
         if (p.aim_bot && p.has_spawn_at) return p.spawn_at;
-        if (horde_mode())
+        if (tower_defense_mode())
             return random_location(horde_cfg.core_x - 2, horde_cfg.core_y - 2,
                                    horde_cfg.core_x + 3, horde_cfg.core_y + 3);
         if (aim_mode() && !p.aim_bot)
@@ -1502,7 +1505,7 @@ struct Server::Impl {
         // The purse opens once: the first rise of a person - never a
         // walker, never a range target - is where the opening hand of
         // the economy lands.
-        if (horde_mode() && p.playing() && !p.zombie && !p.zc_staked) {
+        if (tower_defense_mode() && p.playing() && !p.zombie && !p.zc_staked) {
             p.zc_staked = true;
             p.zc = economy.start;
             system_chat(std::to_string(p.zc) + " credits in hand.", p.id);
@@ -1873,16 +1876,17 @@ struct Server::Impl {
                     static_cast<float>(t.z) - 1.0f};
     }
 
-    // horde.toml beside the server, seen again at every start of a horde
-    // world: sections under [brackets], `key = value` lines, values a
-    // number or a list of numbers in brackets, comments from # or ; to
-    // the end of the line. Unknown keys and sections are skipped, a
-    // malformed line is skipped, and no file at all changes nothing: the
-    // defaults are the game as the fork always played it.
+    // towerdefense.toml beside the server, seen again at every start of
+    // a tower defense world: sections under [brackets], `key = value`
+    // lines, values a number or a list of numbers in brackets, comments
+    // from # or ; to the end of the line. Unknown keys and sections are
+    // skipped, a malformed line is skipped, and no file at all changes
+    // nothing: the defaults are the game as the fork always played it.
     void load_turrets_tuning() {
-        std::ifstream in("horde.toml", std::ios::binary);
+        std::ifstream in("towerdefense.toml", std::ios::binary);
         if (!in) {
-            log("no horde.toml beside the server: the guns stand on their own defaults");
+            log("no towerdefense.toml beside the server: the guns stand "
+                "on their own defaults");
             return;
         }
         const std::string text((std::istreambuf_iterator<char>(in)),
@@ -1973,13 +1977,14 @@ struct Server::Impl {
                 }
             }
         }
-        log("horde.toml: turrets range %.0f, scan %.2f, place %.0f, damage %d/%d/%d, interval %.2f/%.2f/%.2f",
+        log("towerdefense.toml: turrets range %.0f, scan %.2f, place %.0f, "
+            "damage %d/%d/%d, interval %.2f/%.2f/%.2f",
             static_cast<double>(turret_cfg.range), turret_cfg.scan,
             static_cast<double>(turret_cfg.place_range),
             turret_cfg.damage[0], turret_cfg.damage[1], turret_cfg.damage[2],
             turret_cfg.interval[0], turret_cfg.interval[1], turret_cfg.interval[2]);
-        log("horde.toml: economy kill %d, start %d, bonus %d, turret %d+%d, "
-            "upgrades %d/%d, refund %d%%",
+        log("towerdefense.toml: economy kill %d, start %d, bonus %d, "
+            "turret %d+%d, upgrades %d/%d, refund %d%%",
             economy.per_kill, economy.start, economy.wave_bonus,
             economy.price_base, economy.price_step,
             economy.upgrade[0], economy.upgrade[1], economy.refund);
@@ -2131,7 +2136,7 @@ struct Server::Impl {
     // five seconds, the guns' own economy - a client that finishes
     // loading mid game is owed it too.
     void core_state_send() {
-        if (!horde_mode() || !horde) return;
+        if (!tower_defense_mode() || !horde) return;
         const int x = horde_cfg.core_x, y = horde_cfg.core_y;
         const int z = core_top_z;
         const bool again = world_time >= core_resend_next;
@@ -2223,7 +2228,7 @@ struct Server::Impl {
     // them go first, then the ones that stand look around on the scan's
     // clock, fire on the interval's, and say themselves when they changed.
     void turret_tick() {
-        if (!horde_mode()) return;
+        if (!tower_defense_mode()) return;
         for (size_t i = 0; i < turrets.size();) {
             Turret& t = turrets[i];
             if (!map.solid(t.x, t.y, t.z) || !map.solid(t.x, t.y, t.z - 1)) {
@@ -2287,8 +2292,8 @@ struct Server::Impl {
     // higher level; a lower word does not undo a pillar: the way back is
     // the spade, as with any build.
     void turret_place(Player& p, int level, std::string& reply) {
-        if (!horde_mode()) {
-            reply = "Sentry guns are a thing of the horde.";
+        if (!tower_defense_mode()) {
+            reply = "Sentry guns are a thing of the tower defense.";
             return;
         }
         if (!p.alive || !p.playing()) {
@@ -2471,8 +2476,8 @@ struct Server::Impl {
     // a cave - and with it the column stands two blocks tall, the same
     // reading the map's own z has; without it, the walk to land speaks.
     void core_command(Player& p, const std::string& text) {
-        if (!horde_mode() || !horde) {
-            system_chat("The core only stands in a horde world.", p.id);
+        if (!tower_defense_mode() || !horde) {
+            system_chat("The core only stands in a tower defense world.", p.id);
             return;
         }
         std::vector<double> ns;
@@ -2547,9 +2552,9 @@ struct Server::Impl {
         if (slash != std::string::npos) name = name.substr(slash + 1);
         const size_t dot = name.rfind('.');
         if (dot != std::string::npos) name = name.substr(0, dot);
-        if (cfg.horde) {
-            std::lock_guard<std::mutex> lock(cfg.horde->mutex);
-            cfg.horde->map_advance = true;
+        if (cfg.tower_defense) {
+            std::lock_guard<std::mutex> lock(cfg.tower_defense->mutex);
+            cfg.tower_defense->map_advance = true;
         }
         system_chat("Map advance: " + name + " stands next - leave and press "
                      "Tower Defense to play it.", p.id);
@@ -2646,7 +2651,8 @@ struct Server::Impl {
     // legs' own answers. Stuck past a windup, the head earns the
     // licence anyway: a wall faced long enough is worth the spade.
     bool dig_lead(Player& p, bool leg_led) {
-        if (!horde_mode() || !horde_cfg.dig || p.body.airborne) return false;
+        if (!tower_defense_mode() || !horde_cfg.dig ||
+            p.body.airborne) return false;
         const int cx = static_cast<int>(std::floor(p.body.pos.x));
         const int cy = static_cast<int>(std::floor(p.body.pos.y));
         const int fz = static_cast<int>(std::floor(p.body.pos.z + 2.25f));
@@ -3889,7 +3895,7 @@ struct Server::Impl {
                 ++down;
             }
         horde->clear_wave(world_time);
-        if (horde_mode() && !cfg.map_file.empty()) build_core_column();
+        if (tower_defense_mode() && !cfg.map_file.empty()) build_core_column();
         char text[96];
         std::snprintf(text, sizeof text, "%d down; the core mends to %d",
                       down, horde->core_hp());
@@ -4242,7 +4248,7 @@ struct Server::Impl {
             if (p.body.pos.z > 64.0f || !finite3(p.body.pos)) kill(p, nullptr, kFallKill);
         }
         if (aim_mode()) aim_tick(dt);
-        else if (horde_mode()) {
+        else if (tower_defense_mode()) {
             horde_tick();
             // The guns' own beat, after the horde's, so a scan never
             // looks at a wave before the wave takes its step.
@@ -4346,8 +4352,8 @@ struct Server::Impl {
                 // word. Anywhere else the wheel keeps its own.
                 ByteWriter bw;
                 bw.write_u8(static_cast<uint8_t>(PacketId::ExtensionInfo));
-                bw.write_u8(horde_mode() ? 8 : 7);
-                if (horde_mode()) {
+                bw.write_u8(tower_defense_mode() ? 8 : 7);
+                if (tower_defense_mode()) {
                     bw.write_u8(static_cast<uint8_t>(proto::Extension::PieMenu));
                     bw.write_u8(1);
                 }
@@ -4437,7 +4443,7 @@ struct Server::Impl {
                 // owed at once - held with the state for a client still
                 // loading the map - rings and slices whole, for a client
                 // that claimed it opens the server wheel or none at all.
-                p.ext_piemenu = horde_mode() &&
+                p.ext_piemenu = tower_defense_mode() &&
                                 m.offers(proto::Extension::PieMenu);
                 if (p.ext_piemenu) send_pie_menu(p);
             } break;
@@ -5062,22 +5068,24 @@ struct Server::Impl {
             else if (text == "/restart" && aim_mode()) {
                 reset_run();
                 if (p.alive) spawn(p);
-            } else if (text == "/clearwave" && horde_mode()) clear_wave();
-            else if ((text == "/money" || text == "/credits") && horde_mode())
+            } else if (text == "/clearwave" && tower_defense_mode())
+                clear_wave();
+            else if ((text == "/money" || text == "/credits") &&
+                     tower_defense_mode())
                 system_chat(std::to_string(p.zc) + " credits in hand.", p.id);
             else if (text.rfind("/pingmark", 0) == 0)
                 ping_mark_command(p, text);
             else if (text.rfind("/pm", 0) == 0)
                 pm_command(p, text);
-            else if (horde_mode() &&
+            else if (tower_defense_mode() &&
                      (text.rfind("/turret", 0) == 0 || text.rfind("/sentry", 0) == 0)) {
                 turret_command(p, text);
-            } else if (horde_mode() && text.rfind("/core", 0) == 0) {
+            } else if (tower_defense_mode() && text.rfind("/core", 0) == 0) {
                 core_command(p, text);
-            } else if (horde_mode() &&
+            } else if (tower_defense_mode() &&
                        (text == "/va" || text == "/mapadvance")) {
                 map_advance_command(p);
-            } else if (horde_mode())
+            } else if (tower_defense_mode())
                 system_chat("Commands here: /clearwave, /kill, /turret, "
                             "/core, /money, /va", p.id);
             else system_chat(aim_mode() ? "Commands here: /restart, /kill"
@@ -5235,7 +5243,7 @@ bool Server::start(std::string& err) {
     if (s.aim_mode()) {
         s.aim.scenario = s.cfg.scenario;
         s.add_aim_bots();
-    } else if (s.horde_mode()) {
+    } else if (s.tower_defense_mode()) {
         // The corners of the map are the spawns, the middle the core; the map
         // is flat open land everywhere outside the course's corridor. On a
         // .vxl of coastline the cells the settings ask for can be at sea, so
@@ -5299,8 +5307,8 @@ bool Server::start(std::string& err) {
             }
         }
         // The host's own word for the guns' tables, when it wrote one:
-        // horde.toml in the directory the server runs in, seen again at
-        // every start of a horde world.
+        // towerdefense.toml in the directory the server runs in, seen
+        // again at every start of a tower defense world.
         s.load_turrets_tuning();
         s.build_core_column();
         s.map.to_solid_map(s.phys_map);

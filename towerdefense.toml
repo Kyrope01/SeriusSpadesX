@@ -1,11 +1,12 @@
-# The horde's own tables, read by the server at every start of a horde
-# world, from the directory the server runs in. A line the file does not
-# know how to say is skipped; a key it does not know is skipped; the file
-# itself is optional - without it the guns stand on the defaults below,
-# the numbers the fork grew up with. Comments run from # or ; to the end
-# of the line. Sections are named in [brackets]; what the server reads
-# today is [turrets] and [economy]. Values are numbers, or lists of
-# numbers in brackets, one entry per sentry level, level 1 to 3.
+# The tables of the tower defense, read by the server at every start of
+# a tower defense world, from the directory the server runs in. A line
+# the file does not know how to say is skipped; a key it does not know
+# is skipped; the file itself is optional - without it the guns stand
+# on the defaults below, the numbers the fork grew up with. Comments
+# run from # or ; to the end of the line. Sections are named in
+# [brackets]; what the server reads today is [turrets] and [economy].
+# Values are numbers, or lists of numbers in brackets, one entry per
+# sentry level, level 1 to 3.
 
 [turrets]
 
@@ -28,7 +29,7 @@ damage = [2, 5, 5]
 # single shot is light, its rate is not.
 interval = [0.17, 0.17, 0.066]
 
-# The economy of the horde, the Zedcred: a kill pays it, a wave cleared
+# The economy of the tower defense, the Zedcred: a kill pays it, a wave
 # adds a bonus, a sentry is bought and raised with it. A new gun climbs a
 # flat step by each gun the builder already stands - so the park stays
 # buyable as long as the game runs - and each raising is a fixed price

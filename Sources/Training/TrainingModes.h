@@ -11,7 +11,7 @@
 
 namespace training {
 
-// Horde: waves of the walking dead against a core (Horde.h holds the
+// Tower defense: waves of the walking dead against a core (Horde.h holds the
 // brain), the map everywhere flat outside the course's corridor.
 enum class Mode { Tutorial = 0, Aim = 1, Horde = 2 };
 
@@ -99,10 +99,11 @@ struct AimShared {
     bool restart = false;     // the client asks for another run
 };
 
-// Horde: same sharing, for the map the mode plays next. The server side
-// arms /va (the map after this one); the menu thread reads and clears it
-// when the mode starts again, and cannot swap a map mid-game.
-struct HordeShared {
+// Tower defense: same sharing, for the map the mode plays next. The
+// server side arms /va (the map after this one); the menu thread reads
+// and clears it when the mode starts again, and cannot swap a map
+// mid-game.
+struct TowerDefenseShared {
     std::mutex mutex;
     bool map_advance = false; // /va asked for the next map of the roster
 };

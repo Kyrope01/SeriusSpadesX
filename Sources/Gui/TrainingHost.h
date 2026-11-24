@@ -72,13 +72,13 @@ namespace spades {
 			/** Asks for another run of the scenario, from its countdown. */
 			void RestartAim();
 
-			/** The .vxl maps the horde could play besides its own course,
+			/** The .vxl maps the tower defense could play besides its own course,
 			 * as resources of the Maps folder (paks, Resources, user). */
 			static std::vector<std::string> MapRoster();
-			/** The map resource the horde plays, "" for its own course. */
-			static std::string GetHordeMap();
+			/** The map resource the tower defense plays, "" for its own course. */
+			static std::string GetTowerDefenseMap();
 			/** Chooses that map for the next run ("" plays the course). */
-			static void SetHordeMap(const std::string& map);
+			static void SetTowerDefenseMap(const std::string& map);
 			/** Stops it and waits for its thread, normally well under a second. */
 			void Stop();
 

@@ -156,15 +156,16 @@ namespace spades {
 			std::vector<ui::Button*> scenarioButtons;
 			std::vector<ui::Button*> weaponButtons;
 			ui::Button* highlightButton = nullptr;
-			ui::Button* hordeButton = nullptr;
-			/** Picks the map the horde plays, from the Maps folder of the game files. */
-			ui::Button* hordePickButton = nullptr;
+			ui::Button* towerDefenseButton = nullptr;
+			/** Picks the map the tower defense plays, from the Maps folder
+			 * of the game files. */
+			ui::Button* towerDefensePickButton = nullptr;
 			void ShowTraining();
 			void RefreshTrainingPanel();
 			void StartAimScenario(int scenario);
-			void StartHorde();
-			/** Opens the drop down list of maps the horde can play. */
-			void PickHordeMap();
+			void StartTowerDefense();
+			/** Opens the drop down list of maps the tower defense can play. */
+			void PickTowerDefenseMap();
 			/** Joins the course once its server listens, or says why it did not. */
 			void PollTraining();
 			ui::SimpleTabStrip* tabStrip = nullptr;

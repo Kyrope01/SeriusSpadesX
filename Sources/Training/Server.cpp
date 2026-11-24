@@ -487,6 +487,10 @@ struct Player {
     int tool = kToolWeapon;
     uint32_t color = 0x707070;   // 0xRRGGBB
     int kills = 0;
+    // The coin of the horde, the Zedcred: what a kill of the walking dead
+    // pays, what a sentry or its raising costs, kept plain on the player.
+    int zc = 0;                  // credits in hand
+    bool zc_staked = false;      // the purse opened once, at the first rise
 
     bool alive = false;
     int hp = 0;
@@ -625,12 +629,33 @@ struct Player {
 // can see, how often it looks around, how far off the eye the ground may
 // be to found a gun on, and for each level the damage a shot does and the
 // seconds between shots. The defaults are the machine gun family's own.
+// The sentry family walks the classes of the real guns: the light SMG
+// that bodies the base gun, its raising to the MG, and at last the
+// spinning Minigun - a level buys weight of round or rate of fire,
+// never both at once, and no level outclasses a whole park of
+// guns standing below it.
 struct TurretTuning {
     float range = 48.0f;
     double scan = 0.25;
     float place_range = 8.0f;
-    int damage[kTurretLevels] = {20, 25, 10};
-    double interval[kTurretLevels] = {0.5, 0.4, 0.15};
+    int damage[kTurretLevels] = {2, 5, 5};
+    double interval[kTurretLevels] = {0.17, 0.17, 0.066};
+};
+
+// The coin of the horde, the Zedcred: a kill pays it, a wave cleared adds
+// a bonus on top, and a sentry is bought and raised with it. A new gun
+// climbs a flat step by each pillar standing already - the park stays
+// buyable as long as the game runs - and a raising is a fixed price the
+// park never touches. horde.toml says all of it again, by the same word
+// as the tables above.
+struct EconomyTuning {
+    int per_kill = 1;        // the bounty of a grunt; specials ask more
+    int start = 15;          // the purse a first rise opens
+    int wave_bonus = 10;     // plus the number of the wave, on a clear
+    int price_base = 5;      // a first gun, before the step
+    int price_step = 2;      // by each pillar the builder already stands
+    int upgrade[kTurretLevels - 1] = {10, 30};
+    int refund = 70;         // percent back at the word that takes down
 };
 
 // One placed gun: a pillar of two real blocks the server aims and fires.
@@ -648,6 +673,9 @@ struct Turret {
     bool locked = false;
     uint8_t yaw_pack = 0, pitch_pack = 0;   // the aim, quantized for the wire
     double next_scan = 0.0, next_fire = 0.0;
+    // What its buyer sank into it, base and raisings alike: the word that
+    // takes it back down returns part of this to the builder.
+    int spent = 0;
 };
 
 struct Grenade {
@@ -1204,6 +1232,7 @@ struct Server::Impl {
     // owed it by the same five-second refresh.
     std::vector<Turret> turrets;
     TurretTuning turret_cfg;
+    EconomyTuning economy;
     uint8_t turret_next_id = 1;
     double turret_resend_next = 0.0;
     std::vector<proto::TurretState> turrets_sent;
@@ -1470,6 +1499,14 @@ struct Server::Impl {
     void spawn(Player& p) {
         p.respawn_at = -1;
         if (p.team == -2) return;
+        // The purse opens once: the first rise of a person - never a
+        // walker, never a range target - is where the opening hand of
+        // the economy lands.
+        if (horde_mode() && p.playing() && !p.zombie && !p.zc_staked) {
+            p.zc_staked = true;
+            p.zc = economy.start;
+            system_chat(std::to_string(p.zc) + " credits in hand.", p.id);
+        }
         ByteWriter bw;
         bw.write_u8(static_cast<uint8_t>(PacketId::CreatePlayer));
         bw.write_u8(static_cast<uint8_t>(p.id));
@@ -1536,6 +1573,11 @@ struct Server::Impl {
         if (!p.alive) return;
         if (p.zombie && horde) {
             horde->on_zombie_killed();
+            // A walker down pays its bounty to the hand that felled it -
+            // the shooter, or the builder of a gun, when the gun spent
+            // the round - and nothing to a fall of its own.
+            if (by && by != &p && !by->zombie && !by->aim_bot)
+                by->zc += economy.per_kill;
             // The pack does not lose its way with a fallen mate: whoever
             // followed it follows whoever it followed.
             const int fallen_ahead = p.ahead_id;
@@ -1890,6 +1932,28 @@ struct Server::Impl {
             if (eq == std::string::npos) continue;
             const std::string key = lowered(trimmed(line.substr(0, eq)));
             const std::string value = trimmed(line.substr(eq + 1));
+            if (section == "economy") {
+                // The whole of the value as one int; each field then takes
+                // its own fence, the floors and caps of the table above.
+                const int n = static_cast<int>(number(value));
+                if (key == "zedcred_per_kill") {
+                    economy.per_kill = std::max(0, n);
+                } else if (key == "zedcred_start") {
+                    economy.start = std::max(0, n);
+                } else if (key == "wave_bonus_base") {
+                    economy.wave_bonus = std::max(0, n);
+                } else if (key == "turret_price_base") {
+                    economy.price_base = std::max(1, n);
+                } else if (key == "turret_price_step") {
+                    economy.price_step = std::max(0, n);
+                } else if (key == "upgrade1_price" || key == "upgrade2_price") {
+                    const int i = key == "upgrade1_price" ? 0 : 1;
+                    economy.upgrade[i] = std::max(0, n);
+                } else if (key == "turret_refund") {
+                    economy.refund = std::min(100, std::max(0, n));
+                }
+                continue;
+            }
             if (section != "turrets") continue;
             if (key == "range") {
                 turret_cfg.range = std::max(1.0f, static_cast<float>(number(value)));
@@ -1914,6 +1978,11 @@ struct Server::Impl {
             static_cast<double>(turret_cfg.place_range),
             turret_cfg.damage[0], turret_cfg.damage[1], turret_cfg.damage[2],
             turret_cfg.interval[0], turret_cfg.interval[1], turret_cfg.interval[2]);
+        log("horde.toml: economy kill %d, start %d, bonus %d, turret %d+%d, "
+            "upgrades %d/%d, refund %d%%",
+            economy.per_kill, economy.start, economy.wave_bonus,
+            economy.price_base, economy.price_step,
+            economy.upgrade[0], economy.upgrade[1], economy.refund);
     }
 
     // One block's worth of the pillar, aired to the clients as the work of
@@ -2242,12 +2311,27 @@ struct Server::Impl {
                 reply = "A pillar is not undone: dig the blocks out instead.";
                 return;
             }
+            // A raising is a fixed price each level passed, whatever the
+            // park around it - the word that takes it down refunds part.
+            int price = 0;
+            for (int l = t.level; l < level; ++l)
+                price += economy.upgrade[l - 1];
+            if (p.zc < price) {
+                reply = "Not enough credits: " + std::to_string(price) +
+                        " asked, " + std::to_string(p.zc) + " in hand.";
+                return;
+            }
+            p.zc -= price;
+            t.spent += price;
             t.level = level;
             turret_repaint(t);
             turret_resend_next = 0.0;
-            reply = t.owner == p.id
-                        ? "The pillar is raised to level " + std::to_string(level) + "."
-                        : "Not yours, but raised all the same: level " + std::to_string(level) + ".";
+            std::string raised = t.owner == p.id
+                                     ? "The pillar is raised to level "
+                                     : "Not yours, but raised all the same: ";
+            reply = raised + std::to_string(level) + " for " +
+                    std::to_string(price) + " credits; " +
+                    std::to_string(p.zc) + " in hand.";
             return;
         }
         if (hz < 2 || hz > 62 || map.solid(hx, hy, hz - 1) || map.solid(hx, hy, hz - 2)) {
@@ -2278,6 +2362,21 @@ struct Server::Impl {
             reply = "Not enough room above that block.";
             return;
         }
+        // A new gun is the base price plus the step by each pillar the
+        // builder already stands - a park means the next gun costs -
+        // and a level above the base adds its raisings on top.
+        int owned = 0;
+        for (const Turret& t : turrets)
+            if (t.owner == p.id)
+                ++owned;
+        int price = economy.price_base + economy.price_step * owned;
+        for (int l = 1; l < level; ++l)
+            price += economy.upgrade[l - 1];
+        if (p.zc < price) {
+            reply = "Not enough credits: " + std::to_string(price) +
+                    " asked, " + std::to_string(p.zc) + " in hand.";
+            return;
+        }
         // Its name: the next of the wire's own, never one in flight.
         uint8_t id = turret_next_id;
         for (;;) {
@@ -2298,24 +2397,34 @@ struct Server::Impl {
         t.y = hy;
         t.z = hz - 1;
         t.owner = p.id;
+        t.spent = price;
         t.next_scan = world_time + 0.1;  // a fresh gun looks around at once
         turrets.push_back(t);
         turret_resend_next = 0.0;
-        reply = "Sentry level " + std::to_string(level) + " placed.";
+        p.zc -= price;
+        reply = "Sentry level " + std::to_string(level) + " placed for " +
+                std::to_string(price) + " credits; " + std::to_string(p.zc) +
+                " in hand.";
     }
 
     // A builder's own pillars taken back down: only their own, the rest
     // of the team's works are not theirs to unsettle.
-    int turret_remove_owned(const Player& p) {
+    // Each one returns a part of what was sunk into it, base and
+    // raisings alike.
+    int turret_remove_owned(Player& p, int& back) {
         int down = 0;
+        back = 0;
         for (size_t i = 0; i < turrets.size();) {
             if (turrets[i].owner != p.id) {
                 ++i;
                 continue;
             }
+            back += turrets[i].spent * economy.refund / 100;
             turret_erase(i);
             ++down;
         }
+        if (down > 0)
+            p.zc += back;
         return down;
     }
 
@@ -2326,9 +2435,13 @@ struct Server::Impl {
     void turret_command(Player& p, const std::string& text) {
         const std::string word = lowered(text);
         if (word == "/turretremove" || word == "/sentryremove") {
-            const int down = turret_remove_owned(p);
-            system_chat(down > 0 ? std::to_string(down) + " sentries taken down."
-                                 : "You have no sentries.", p.id);
+            int back = 0;
+            const int down = turret_remove_owned(p, back);
+            system_chat(down > 0
+                            ? std::to_string(down) + " sentries taken down; " +
+                                  std::to_string(back) + " credits back, " +
+                                  std::to_string(p.zc) + " in hand."
+                            : "You have no sentries.", p.id);
             return;
         }
         const std::string rest =
@@ -3832,6 +3945,17 @@ struct Server::Impl {
                     std::snprintf(text, sizeof text, "Wave cleared; the core mends to %d",
                                   horde->core_hp());
                     system_chat(text);
+                    // The pay of the wave: a bonus that climbs with it,
+                    // every hand still in the world the richer for it.
+                    const int bonus = economy.wave_bonus + horde->wave();
+                    for (auto& o : players) {
+                        if (!o || o->zombie || o->aim_bot || !o->playing())
+                            continue;
+                        o->zc += bonus;
+                        system_chat("Wave bonus: +" + std::to_string(bonus) +
+                                    " credits; " + std::to_string(o->zc) +
+                                    " in hand.", o->id);
+                    }
                     break;
                 }
                 case horde::Phase::Victory:
@@ -4939,6 +5063,8 @@ struct Server::Impl {
                 reset_run();
                 if (p.alive) spawn(p);
             } else if (text == "/clearwave" && horde_mode()) clear_wave();
+            else if ((text == "/money" || text == "/credits") && horde_mode())
+                system_chat(std::to_string(p.zc) + " credits in hand.", p.id);
             else if (text.rfind("/pingmark", 0) == 0)
                 ping_mark_command(p, text);
             else if (text.rfind("/pm", 0) == 0)
@@ -4953,7 +5079,7 @@ struct Server::Impl {
                 map_advance_command(p);
             } else if (horde_mode())
                 system_chat("Commands here: /clearwave, /kill, /turret, "
-                            "/core, /va", p.id);
+                            "/core, /money, /va", p.id);
             else system_chat(aim_mode() ? "Commands here: /restart, /kill"
                                         : "Commands here: /kill", p.id);
             return;

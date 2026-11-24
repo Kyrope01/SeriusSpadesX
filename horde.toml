@@ -4,8 +4,8 @@
 # itself is optional - without it the guns stand on the defaults below,
 # the numbers the fork grew up with. Comments run from # or ; to the end
 # of the line. Sections are named in [brackets]; what the server reads
-# today is [turrets]. Values are numbers, or lists of numbers in
-# brackets, one entry per sentry level, level 1 to 3.
+# today is [turrets] and [economy]. Values are numbers, or lists of
+# numbers in brackets, one entry per sentry level, level 1 to 3.
 
 [turrets]
 
@@ -19,9 +19,42 @@ scan_interval = 0.25
 # ground of a gun, in blocks.
 place_range = 8.0
 
-# The damage of one shot, by level. Level 3 is the low, fast gun:
-# its single shot is small, its rate is not.
-damage = [20, 25, 10]
+# The damage of one shot, by level. Level 1 is the light SMG the base gun
+# is, level 2 the MG with its heavier round, level 3 the Minigun: a level
+# buys weight of round or rate of fire, never both at once.
+damage = [2, 5, 5]
 
-# The seconds between shots, by level.
-interval = [0.5, 0.4, 0.15]
+# The seconds between shots, by level. The Minigun alone is fast: its
+# single shot is light, its rate is not.
+interval = [0.17, 0.17, 0.066]
+
+# The economy of the horde, the Zedcred: a kill pays it, a wave cleared
+# adds a bonus, a sentry is bought and raised with it. A new gun climbs a
+# flat step by each gun the builder already stands - so the park stays
+# buyable as long as the game runs - and each raising is a fixed price
+# the park never touches.
+
+[economy]
+
+# What a kill of a grunt pays. The specials will ask more.
+zedcred_per_kill = 1
+
+# The purse a first rise opens.
+zedcred_start = 15
+
+# A wave cleared pays this plus the number of the wave.
+wave_bonus_base = 10
+
+# The first gun of a builder, before the step.
+turret_price_base = 5
+
+# By each gun the builder already stands.
+turret_price_step = 2
+
+# The fixed reach of each raising: SMG to MG, MG to Minigun.
+upgrade1_price = 10
+upgrade2_price = 30
+
+# The part, in percent, of all a builder sank into a gun that the word
+# taking it down returns.
+turret_refund = 70

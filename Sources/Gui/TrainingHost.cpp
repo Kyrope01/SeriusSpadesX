@@ -123,8 +123,8 @@ namespace spades {
 				if (whole.size() < 5 ||
 				    whole.compare(whole.size() - 4, 4, ".vxl") != 0)
 					continue;
-				if (whole == "termina_fieldstd.vxl")
-					continue; // the course stands in the menu of its own
+				if (whole == "termina_fieldstd.vxl" || whole == "title.vxl")
+					continue; // the course is the menu head; Title, its backdrop
 				maps.push_back("Maps/" + file);
 			}
 			std::sort(maps.begin(), maps.end());

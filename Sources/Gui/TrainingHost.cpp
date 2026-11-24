@@ -20,7 +20,9 @@
 
 #include "TrainingHost.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <mutex>
 #include <thread>
 
@@ -98,6 +100,39 @@ namespace spades {
 			impl->aim->restart = true;
 		}
 
+		/** The name in lower case, for suffix and course checks. */
+		static std::string lowered_name(std::string s) {
+			std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+				return static_cast<char>(std::tolower(c));
+			});
+			return s;
+		}
+
+		std::vector<std::string> TrainingHost::MapRoster() {
+			std::vector<std::string> maps;
+			std::vector<std::string> files;
+			try {
+				files = spades::FileManager::EnumFiles("Maps");
+			} catch (const std::exception&) {
+				return maps; // no Maps folder: the course is the whole menu
+			}
+			for (const std::string& file : files) {
+				const std::string whole = lowered_name(file);
+				if (whole.size() < 5 ||
+				    whole.compare(whole.size() - 4, 4, ".vxl") != 0)
+					continue;
+				if (whole == "termina_fieldstd.vxl")
+					continue; // the course stands in the menu of its own
+				maps.push_back("Maps/" + file);
+			}
+			std::sort(maps.begin(), maps.end());
+			return maps;
+		}
+
+		std::string TrainingHost::GetHordeMap() { return (std::string)cg_hordeMap; }
+
+		void TrainingHost::SetHordeMap(const std::string& map) { cg_hordeMap = map; }
+
 		std::string TrainingHost::Start(const Launch& what) {
 			Stop();
 			launch = what;
@@ -124,7 +159,8 @@ namespace spades {
 			const Launch run = what;
 			const std::string hordeMap = (std::string)cg_hordeMap;
 			const int hordeCoreX = (int)cg_hordeCoreX, hordeCoreY = (int)cg_hordeCoreY;
-			impl->thread = std::thread([self, listenPort, run, hordeMap, hordeCoreX, hordeCoreY]() {
+			impl->thread = std::thread([self, listenPort, run, hordeMap,
+			                            hordeCoreX, hordeCoreY]() {
 				host::HostConfig cfg;
 				cfg.port = static_cast<uint16_t>(listenPort);
 				cfg.mode = run.mode;
@@ -133,12 +169,28 @@ namespace spades {
 				cfg.map_file = hordeMap;
 				cfg.core_x = hordeCoreX;
 				cfg.core_y = hordeCoreY;
-				// The mode's own course ships in the paks with the game:
-				// Termina Fields, its .vxl and its settings .txt both, read
-				// the same way every other asset is read. A .vxl the setting
-				// names outranks it; a world whose paks lost it falls back
-				// to the generated course, the game still a game.
-				if (run.mode == training::Mode::Horde && hordeMap.empty() &&
+				// A map the Maps folder carries is played as a resource, read
+				// the same way every other asset is read - its settings .txt
+				// beside it too, and the server logs it by name. The setting
+				// only names a resource; a path the game cannot see falls back
+				// to map_file above, and a world with neither of them still
+				// stands the old road: the course, shipped in the paks, and
+				// behind it the generated one.
+				if (run.mode == training::Mode::Horde && !hordeMap.empty() &&
+				    spades::FileManager::FileExists(hordeMap)) {
+					cfg.map_data = spades::FileManager::ReadAllBytes(hordeMap);
+					cfg.map_name = hordeMap;
+					std::string side = hordeMap;
+					const size_t slash = side.rfind('/');
+					const size_t dot = side.rfind('.');
+					if (dot != std::string::npos &&
+					    (slash == std::string::npos || dot > slash))
+						side = side.substr(0, dot) + ".txt";
+					if (spades::FileManager::FileExists(side))
+						cfg.map_settings = spades::FileManager::ReadAllBytes(side);
+					SPLog("[Training] the named map %s rides the game files",
+					      hordeMap.c_str());
+				} else if (run.mode == training::Mode::Horde && hordeMap.empty() &&
 				    spades::FileManager::FileExists("Maps/Termina_FieldsTD.vxl")) {
 					cfg.map_data = spades::FileManager::ReadAllBytes("Maps/Termina_FieldsTD.vxl");
 					if (spades::FileManager::FileExists("Maps/Termina_FieldsTD.txt"))

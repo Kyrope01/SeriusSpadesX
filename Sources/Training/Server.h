@@ -47,6 +47,9 @@ struct HostConfig {
     // they are played whatever map_file says; a map_file of a world that
     // has neither still falls back to the generated course.
     std::string map_data, map_settings;
+    // The resource the map_data bytes were read from ("" for the shipped
+    // course or the generated one), so the log can name it.
+    std::string map_name;
     int core_x = 256, core_y = 256;
     // Aim: the run's status for the HUD, and its restart requests. Shared with
     // the game, which runs this server on a thread of its own.

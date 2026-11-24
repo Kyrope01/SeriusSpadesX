@@ -757,6 +757,9 @@ struct Server::Impl {
             if (!map.load_vxl(reinterpret_cast<const uint8_t*>(cfg.map_data.data()),
                               cfg.map_data.size(), err))
                 return false;
+            if (!cfg.map_name.empty())
+                log("the named map %s rides the game files",
+                    cfg.map_name.c_str());
             read_map_settings(cfg.map_settings);
             map.to_solid_map(phys_map);
             return true;

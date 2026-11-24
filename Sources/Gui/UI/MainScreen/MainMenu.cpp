@@ -28,6 +28,7 @@
 #include <Client/Fonts.h>
 #include <Client/IImage.h>
 #include <Client/IRenderer.h>
+#include <Core/FileManager.h>
 #include <Core/Settings.h>
 #include <Core/ShellApi.h>
 #include <Core/Strings.h>
@@ -43,6 +44,7 @@
 #include <Gui/UI/Framework/UIManager.h>
 #include <Gui/UI/Settings/PreferenceView.h>
 #include <Gui/UI/Widgets/DrawUtils.h>
+#include <Gui/UI/Widgets/DropDownList.h>
 #include <Gui/UI/Widgets/Label.h>
 #include <Gui/UI/Widgets/MessageBox.h>
 #include <Gui/UI/Widgets/TextPromptScreen.h>
@@ -672,7 +674,8 @@ namespace spades {
 
 				const float bw = std::min(520.0F, sw - 32.0F);
 				const float x = (sw - bw) * 0.5F;
-				const float bh = std::max(26.0F, std::min(36.0F, (sh - tabStripPos - 40.0F) / 13.0F));
+				const float bh =
+				    std::max(26.0F, std::min(36.0F, (sh - tabStripPos - 40.0F) / 14.0F));
 				const float gap = 6.0F;
 				float y = tabStripPos;
 				auto label = [&](const std::string& text, float h, Vector4 color) {
@@ -722,6 +725,8 @@ namespace spades {
 								                        " marching on a core you defend"), 26.0F,
 				      MakeVector4(0.45F, 0.85F, 0.45F, 1.0F));
 				hordeButton = button(x, bw, [this] { StartHorde(); });
+				y += bh + gap;
+				hordePickButton = button(x, bw, [this] { PickHordeMap(); });
 				y += bh + gap;
 				ui::Button* back = button(x, bw, [this] { ShowHome(); });
 				back->caption = _Tr("MainScreen", "Back");
@@ -812,6 +817,18 @@ namespace spades {
 			RefreshTrainingPanel();
 		}
 
+		/** The short name of a map resource: no folder, no suffix. */
+		static std::string HordeMapName(const std::string& map) {
+			std::string base = map;
+			const size_t slash = base.rfind('/');
+			if (slash != std::string::npos)
+				base = base.substr(slash + 1);
+			const size_t dot = base.rfind('.');
+			if (dot != std::string::npos)
+				base = base.substr(0, dot);
+			return base;
+		}
+
 		void MainScreenMainMenu::RefreshTrainingPanel() {
 			const auto bests = client::Client::ReadTrainingBests();
 			auto best = [&](const std::string& key) -> float {
@@ -862,6 +879,12 @@ namespace spades {
 			                             : _Tr("MainScreen", "Highlight targets: off");
 			if (hordeButton)
 				hordeButton->caption = _Tr("MainScreen", "Tower Defense");
+			if (hordePickButton) {
+				const std::string map = TrainingHost::GetHordeMap();
+				hordePickButton->caption = _Tr("MainScreen", "Map") + ": " +
+				    (map.empty() ? _Tr("MainScreen", "the mode course, Termina Fields")
+				                 : HordeMapName(map));
+			}
 		}
 
 		void MainScreenMainMenu::StartAimScenario(int scenario) {
@@ -878,6 +901,29 @@ namespace spades {
 			TrainingHost::Launch launch;
 			launch.mode = training::Mode::Horde;
 			StartTraining(launch);
+		}
+
+		void MainScreenMainMenu::PickHordeMap() {
+			const std::vector<std::string> roster = TrainingHost::MapRoster();
+			std::vector<std::string> items;
+			items.push_back(_Tr("MainScreen", "the mode course, Termina Fields"));
+			for (const std::string& map : roster)
+				items.push_back(HordeMapName(map));
+			const std::string current = TrainingHost::GetHordeMap();
+			int selected = 0;
+			for (int i = 0; i < (int)roster.size(); i++)
+				if (roster[i] == current)
+					selected = i + 1;
+			ui::ShowDropDownList(*hordePickButton, std::move(items),
+			                     [this, roster](int index) {
+				                     if (index < 0)
+					                     return; // dismissed
+				                     if (index == 0)
+					                     TrainingHost::SetHordeMap("");
+				                     else if (index - 1 < (int)roster.size())
+						                     TrainingHost::SetHordeMap(roster[index - 1]);
+				                     RefreshTrainingPanel();
+			                     }, selected);
 		}
 
 		void MainScreenMainMenu::ShowHome() {

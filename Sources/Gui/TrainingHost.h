@@ -22,6 +22,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <Training/TrainingModes.h>
 
@@ -70,6 +71,14 @@ namespace spades {
 			training::AimStatus GetAimStatus();
 			/** Asks for another run of the scenario, from its countdown. */
 			void RestartAim();
+
+			/** The .vxl maps the horde could play besides its own course,
+			 * as resources of the Maps folder (paks, Resources, user). */
+			static std::vector<std::string> MapRoster();
+			/** The map resource the horde plays, "" for its own course. */
+			static std::string GetHordeMap();
+			/** Chooses that map for the next run ("" plays the course). */
+			static void SetHordeMap(const std::string& map);
 			/** Stops it and waits for its thread, normally well under a second. */
 			void Stop();
 

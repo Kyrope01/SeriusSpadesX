@@ -24,6 +24,7 @@
 #include "Client.h"
 
 #include <Core/ConcurrentDispatch.h>
+#include <Core/FileManager.h>
 #include <Core/Settings.h>
 #include <Core/Strings.h>
 
@@ -1950,6 +1951,29 @@ namespace spades {
 
 		void Client::GrenadeExploded(const Grenade& g) {
 			SPADES_MARK_FUNCTION();
+
+			// A grenade flown in a set of its own lands as its spit:
+			// the pool the server paints is the whole landing, and
+			// the pow of steel would speak for powder that is not
+			// there. AddGrenadeToScene flies the same skin.
+			const int throwerId = g.GetOwnerId();
+			if (throwerId >= 0 &&
+			    static_cast<size_t>(throwerId) < clientPlayers.size()) {
+				ClientPlayer *thrower =
+				  clientPlayers[static_cast<size_t>(throwerId)]
+				    .GetPointerOrNull();
+				if (thrower) {
+					const std::string set = thrower->OutfitFolder();
+					if (!set.empty()) {
+						static const char *const kPaths[2] = {
+						  "Tool/Grenade.kv6", "Grenade/Grenade.kv6"};
+						for (const char *part : kPaths) {
+							if (FileManager::FileExists((set + part).c_str()))
+								return; // the spit lands quietly
+						}
+					}
+				}
+			}
 
 			const auto& origin = g.GetPosition();
 

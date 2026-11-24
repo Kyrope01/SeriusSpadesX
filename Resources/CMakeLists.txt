@@ -214,7 +214,7 @@ if(ZEROSPADES_RESOURCES)
 			COMMAND
 				${CMAKE_COMMAND} -E copy_if_different
 					${COMPILED_PAK_FILES}
-					${CMAKE_BINARY_DIR}/bin/$<CONFIGURATION>/Resources)
+					${CMAKE_BINARY_DIR}/bin/$<CONFIGURATION>/Resources
 			# the tower defense tuning rides beside the exe, where the
 			# mode reads it
 			COMMAND

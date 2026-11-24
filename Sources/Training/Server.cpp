@@ -184,6 +184,10 @@ constexpr double kStuckHeadDisband = 6.0;
 constexpr double kStuckTeleport = 15.0;
 constexpr double kTeleportAgain = 20.0;
 constexpr int kTeleportAhead = 12;
+// The beat the probe speaks on: a walker the map asked to hear about
+// says its piece on this clock and no sooner, that the log the doctor
+// reads stays a line, not a scream.
+constexpr double kProbeAgain = 2.0;
 // The beat the way in's vapour is laid afresh on: the reading re-read,
 // the beds re-said, an obstacle answered within the beat - the trail
 // follows the ground, and the ground is moved on while the walk is on.
@@ -581,6 +585,9 @@ struct Player {
     double detour_at = -1.0;
     // When it last flung itself at the step it could not climb.
     double pounce_at = -1e9;
+    // When it last spoke its probe line: the debug a map asks for
+    // keeps its peace until this clock comes round again.
+    double probe_at = -1e9;
     // When its line last rode the last resort down the road: the mercy
     // re-arms slower than anything else the stuck are owed, that the
     // road, more than the carrying, stays the way home.
@@ -809,6 +816,7 @@ struct Server::Impl {
     // a room under a roof, it would name the hill above the core's head.
     void read_map_settings(const std::string& text) {
         map_core_x = map_core_y = map_core_z = -1;
+        map_probe = 0;
         map_spawn_x.clear();
         map_spawn_y.clear();
         map_spawn_z.clear();
@@ -972,6 +980,8 @@ struct Server::Impl {
                 map_core_x = static_cast<int>(ns[0]);
                 map_core_y = static_cast<int>(ns[1]);
                 if (ns.size() >= 3) map_core_z = static_cast<int>(ns[2]);
+            } else if (key_l == "zombie_debug" && !ns.empty()) {
+                map_probe = ns[0] >= 0.5 ? 1 : 0;
             }
         }
         if (!map_spawn_x.empty())
@@ -984,6 +994,8 @@ struct Server::Impl {
             log("map settings: core at %d, %d", map_core_x, map_core_y);
         else
             log("map settings: no core_position; the settings' own cell stands");
+        if (map_probe)
+            log("map settings: the zombie debug probe speaks for the pinned");
     }
     // The nearest land column to (x, y): the one asked for when its bedrock
     // layer is solid, and the first land found scanning rings out otherwise
@@ -1097,6 +1109,11 @@ struct Server::Impl {
     // bedrock of the room its town hides in, named so the core can stand
     // inside and not on the hill above it.
     int map_core_x = -1, map_core_y = -1, map_core_z = -1;
+    // The map asking for the pinned walkers to say their piece in the
+    // log, one ladder a walker a probe beat: the settings of the map
+    // carry the switch, for the stuck a map cannot see stays stuck
+    // until the one reading it learns why.
+    int map_probe = 0;
     // The spawn sites the map settings list, when they list any (the
     // zombie_spawn_position key): the fronts come from these cells, in
     // the order the file lists them, and no site is added beyond them.
@@ -2751,7 +2768,20 @@ struct Server::Impl {
         // the advice names with - the legs' trace dies where the legs
         // do, and a head pinned is exactly there. No trace, no mercy.
         std::vector<horde::RouteCell> route;
-        if (!horde->trace_dig(cx, cy, route)) return;
+        if (!horde->trace_dig(cx, cy, route)) {
+            // The probe: a head owed the road learns that the spade walk
+            // holds no road home from where it stands - the one reading
+            // a stuck map wants first.
+            if (map_probe && world_time - p.probe_at >= kProbeAgain) {
+                const int fz = static_cast<int>(
+                    std::floor(p.body.pos.z + 2.25f));
+                p.probe_at = world_time;
+                log("probe %d: the pinned head at %d,%d,%d reads no road"
+                    " home the spade walk holds",
+                    p.id, cx, cy, fz);
+            }
+            return;
+        }
         for (size_t i = kTeleportAhead; i < route.size(); ++i) {
             const horde::RouteCell& at = route[i];
             if (std::abs(at.x - cx) + std::abs(at.y - cy) < 4) continue;
@@ -3193,6 +3223,33 @@ struct Server::Impl {
             }
             if (moved < 0.35f ||
                 p.stall_windows >= kZombieYoyoWindows) {
+                // The probe the map asked for: a window stood still says
+                // where the walker is, what each walk reads at its feet,
+                // what the advice hands back, and what every clock of
+                // the pinned has come to - one line a walker, no sooner
+                // than the probe beat, that the log stays readable.
+                if (map_probe && world_time - p.probe_at >= kProbeAgain) {
+                    p.probe_at = world_time;
+                    const int legs = p.body.airborne
+                                         ? -2 : horde->distance(cx, cy, fz);
+                    const int spade = p.body.airborne
+                                         ? -2 : horde->dig_distance(cx, cy, fz);
+                    int qx = cx, qy = cy, qz = fz;
+                    const bool has_advice = !p.body.airborne &&
+                                            horde->next_step(cx, cy, fz,
+                                                             qx, qy, qz);
+                    log("probe %d: at %d,%d,%d ahead %d, legs %d, spade %d,"
+                        " advice %d -> %d,%d,%d, stuck %.1f, watch %.1f,"
+                        " detour %.1f, spade_at %.1f",
+                        p.id, cx, cy, fz, p.ahead_id, legs, spade,
+                        static_cast<int>(has_advice), qx, qy, qz,
+                        p.stuck_at < 0.0 ? -1.0 : world_time - p.stuck_at,
+                        p.dig_watch_at < 0.0
+                            ? -1.0 : world_time - p.dig_watch_at,
+                        p.detour_at < 0.0
+                            ? -1.0 : world_time - p.detour_at,
+                        world_time - p.spade_at);
+                }
                 // A heel held is a place kept, not a standstill: within
                 // the sight of the one ahead on LEVEL ground the window
                 // is shelved - but a heel one step down the stair holds
@@ -3209,6 +3266,19 @@ struct Server::Impl {
                         kHeelSight * kHeelSight) {
                         if (std::fabs(ahead->body.pos.z - p.body.pos.z) <
                             1.0f) {
+                            // The probe: the pile each member of it can
+                            // see the one ahead of stays shelved here,
+                            // hop and fling and spade all disarmed - the
+                            // doctor wants the shelving said out loud.
+                            if (map_probe &&
+                                world_time - p.probe_at >= kProbeAgain) {
+                                p.probe_at = world_time;
+                                log("probe %d: at %d,%d,%d shelved by sight"
+                                    " of ahead %d at dz %.1f",
+                                    p.id, cx, cy, fz, p.ahead_id,
+                                    static_cast<double>(
+                                        ahead->body.pos.z - p.body.pos.z));
+                            }
                             p.stuck_at = -1.0;
                             return;
                         }

@@ -5,6 +5,19 @@ version's section at the top of its release notes, under "What's new", and
 the game shows those lines when it offers the update. Keep each line short:
 one change, in a player's words.
 
+## 0.3.8
+
+- New: the horde plays the map you pick - a button under Tower Defense
+  lists every map in the Maps folder, the mode's own course at the top
+- New: the /va chat command in a horde world says which map stands next -
+  leave to the menu and press Tower Defense to play it
+- Improved: the walking dead cross the land better - vaulting low walls,
+  climbing the stairs they dig, detouring around a maze that beats them
+- New: a map's settings file can name its zombie fronts and its core, and
+  put each named spawn site on the floor it asks for
+- Fixed: those settings read again, written plain or quoted, and the
+  server says which map and settings it opened
+
 ## 0.3.7
 
 - New: the wheel opens on a Defence page - build, aim and clear the turrets

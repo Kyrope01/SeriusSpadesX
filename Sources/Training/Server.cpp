@@ -2687,11 +2687,14 @@ struct Server::Impl {
         system_chat(reply, p.id);
     }
 
-    // A brute by the word of a person: the kind named, stood on the
-    // block the crosshair names, dressed as its wave dresses it. A
-    // testing tool first: the wave keeps its own ledger without it, so
-    // its life and its death move no count. Says the kinds when the
-    // word says none.
+    // A brute by the word of a person: the kind named, stood at one of
+    // the places the waves themselves are born, drawn of the pool at
+    // random - the site map named or one of the built ten - on the very
+    // floor the march stands its own walkers on, dressed as its wave
+    // dresses it. A testing tool first: the wave keeps its own ledger
+    // without it, so its life and its death move no count, and a brute
+    // born at a wave door walks the way the waves walk. Says the kinds
+    // when the word says none.
     void brute_command(Player& p, const std::string& text) {
         const std::string word = lowered(text);
         const std::string rest =
@@ -2712,30 +2715,43 @@ struct Server::Impl {
             system_chat("usage: /brute <" + list + ">", p.id);
             return;
         }
-        if (!p.alive || !p.playing()) {
-            system_chat("Spawn in before standing a brute up.", p.id);
+        if (!horde) {
+            system_chat("The waves alone stand a brute.", p.id);
             return;
         }
-        int hx = 0, hy = 0, hz = 0;
-        if (!turret_aim_hit(p, hx, hy, hz)) {
-            system_chat("Aim at a block to stand the brute on.", p.id);
+        // Born where the waves are born: a site drawn of the pool at
+        // random, its own floor first and one of its square around,
+        // then the next site of the pool the same way, until a floor
+        // the stand says yes to. That floor is the one the wave stands
+        // its walkers on - never a perch over it, never a room under.
+        const horde::Config& hc = horde->config();
+        const int pool_n = horde->spawn_pool();
+        const size_t base = rng() % static_cast<size_t>(pool_n);
+        int sx = 0, sy = 0, sz = -1;
+        for (int j = 0; j < pool_n && sz < 0; ++j) {
+            const size_t k =
+                (base + static_cast<size_t>(j)) % static_cast<size_t>(pool_n);
+            const int x0 = hc.spawn_x[k], y0 = hc.spawn_y[k];
+            for (int dx = -2; dx <= 2 && sz < 0; ++dx)
+                for (int dy = -2; dy <= 2; ++dy) {
+                    const int f = horde->stand_floor(x0 + dx, y0 + dy);
+                    if (f >= 0) {
+                        sx = x0 + dx;
+                        sy = y0 + dy;
+                        sz = f;
+                        break;
+                    }
+                }
+        }
+        if (sz < 0) {
+            system_chat("No wave site stands a floor.", p.id);
             return;
         }
-        if (hz < 2 || hz > 62 || map.solid(hx, hy, hz - 1) ||
-            map.solid(hx, hy, hz - 2)) {
-            system_chat("Not enough room above that block.", p.id);
-            return;
-        }
-        if (core_column_cell(hx, hy, hz - 1) ||
-            core_column_cell(hx, hy, hz - 2)) {
-            system_chat("The core column is not a pedestal.", p.id);
-            return;
-        }
-        const horde::SpawnAt at{hx, hy, hz - 2, world_time, -1};
+        const horde::SpawnAt at{sx, sy, sz, world_time, -1};
         add_zombie(at, kind, true);
         const std::string stood =
             lowered(std::string(specials[static_cast<size_t>(kind)].name));
-        system_chat("The " + stood + " stands.", p.id);
+        system_chat("The " + stood + " stands with the waves.", p.id);
     }
 
     // The core's own word: /core x y stands it at a new cell, however the

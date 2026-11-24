@@ -774,12 +774,22 @@ struct Server::Impl {
                 return false;
             }
             if (!map.load_vxl(data.data(), data.size(), err)) return false;
-            std::ifstream txt(sibling_settings_file(cfg.map_file), std::ios::binary);
+            const std::string side = sibling_settings_file(cfg.map_file);
+            // The map says its own address, and its settings file theirs:
+            // a path the eye believes in and a path the game really opens
+            // are two different things, and a settings file the game cannot
+            // see reads like settings that were never there.
+            log("the horde plays the map at <%s>, the settings beside it "
+                "at <%s>",
+                cfg.map_file.c_str(), side.c_str());
+            std::ifstream txt(side, std::ios::binary);
             if (txt) {
                 const std::string settings((std::istreambuf_iterator<char>(txt)),
                                            std::istreambuf_iterator<char>());
                 read_map_settings(settings);
             } else {
+                log("no settings file beside the map: the map stands on "
+                    "its own");
                 read_map_settings("");
             }
             map.to_solid_map(phys_map);

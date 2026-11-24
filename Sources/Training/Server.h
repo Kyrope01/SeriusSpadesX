@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "TrainingModes.h"
 
@@ -50,10 +51,15 @@ struct HostConfig {
     // The resource the map_data bytes were read from ("" for the shipped
     // course or the generated one), so the log can name it.
     std::string map_name;
+    // The .vxl resources the horde could play, for /va to advance through.
+    std::vector<std::string> map_roster;
     int core_x = 256, core_y = 256;
     // Aim: the run's status for the HUD, and its restart requests. Shared with
     // the game, which runs this server on a thread of its own.
     std::shared_ptr<training::AimShared> aim;
+    // Horde: /va arms the next map of the roster here; the menu thread reads
+    // and clears it when the mode starts again.
+    std::shared_ptr<training::HordeShared> horde;
 };
 
 class Server {

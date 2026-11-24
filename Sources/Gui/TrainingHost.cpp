@@ -51,6 +51,8 @@ namespace spades {
 			std::atomic<bool> stop{false};
 			std::thread thread;
 			std::shared_ptr<training::AimShared> aim = std::make_shared<training::AimShared>();
+			std::shared_ptr<training::HordeShared> horde =
+			    std::make_shared<training::HordeShared>();
 
 			void Join() {
 				if (thread.joinable()) {
@@ -136,6 +138,30 @@ namespace spades {
 		std::string TrainingHost::Start(const Launch& what) {
 			Stop();
 			launch = what;
+			// /va asked for the map after this one while the last run stood:
+			// answered here, where the next run takes its map from.
+			if (what.mode == training::Mode::Horde) {
+				bool advance = false;
+				{
+					std::lock_guard<std::mutex> lock(impl->horde->mutex);
+					advance = impl->horde->map_advance;
+					impl->horde->map_advance = false;
+				}
+				if (advance) {
+					const std::vector<std::string> roster = MapRoster();
+					const int n = static_cast<int>(roster.size());
+					if (n > 0) {
+						const std::string current = (std::string)cg_hordeMap;
+						int at = -1;
+						for (int i = 0; i < n; i++)
+							if (roster[i] == current)
+								at = i;
+						const std::string next = roster[(at + 1) % n];
+						SPLog("[Training] map advance: the next map is %s", next.c_str());
+						SetHordeMap(next);
+					}
+				}
+			}
 			{
 				// A new run: nothing of the last one shows.
 				std::lock_guard<std::mutex> lock(impl->aim->mutex);
@@ -158,8 +184,9 @@ namespace spades {
 			const int listenPort = port;
 			const Launch run = what;
 			const std::string hordeMap = (std::string)cg_hordeMap;
+			const std::vector<std::string> hordeRoster = MapRoster();
 			const int hordeCoreX = (int)cg_hordeCoreX, hordeCoreY = (int)cg_hordeCoreY;
-			impl->thread = std::thread([self, listenPort, run, hordeMap,
+			impl->thread = std::thread([self, listenPort, run, hordeMap, hordeRoster,
 			                            hordeCoreX, hordeCoreY]() {
 				host::HostConfig cfg;
 				cfg.port = static_cast<uint16_t>(listenPort);
@@ -167,6 +194,8 @@ namespace spades {
 				cfg.scenario = run.scenario;
 				cfg.highlight_targets = run.highlight;
 				cfg.map_file = hordeMap;
+				cfg.map_roster = hordeRoster;
+				cfg.horde = self->horde;
 				cfg.core_x = hordeCoreX;
 				cfg.core_y = hordeCoreY;
 				// A map the Maps folder carries is played as a resource, read

@@ -30,6 +30,7 @@
 #include <limits>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <thread>
 #include <vector>
@@ -2408,6 +2409,37 @@ struct Server::Impl {
         system_chat("The core stands at " + std::to_string(x) + ", " +
                          std::to_string(y) + ".");
         log("the core moved to %d, %d by %s's word", x, y, p.name.c_str());
+    }
+
+    // /va: the map after this one, of those the game files carry. A world
+    // cannot swap its own ground under the feet of a client mid-game, so it
+    // only asks the menu thread - the flag read when the mode starts again -
+    // and says which map to pick then; leaving and pressing Tower Defense
+    // plays it.
+    void map_advance_command(Player& p) {
+        if (cfg.map_roster.empty()) {
+            system_chat("Map advance: no other map stands beside the course "
+                        "in the game files.", p.id);
+            return;
+        }
+        std::string next = cfg.map_roster[0];
+        for (size_t i = 0; i < cfg.map_roster.size(); i++) {
+            if (cfg.map_name == cfg.map_roster[i]) {
+                next = cfg.map_roster[(i + 1) % cfg.map_roster.size()];
+                break;
+            }
+        }
+        std::string name = next;
+        const size_t slash = name.rfind('/');
+        if (slash != std::string::npos) name = name.substr(slash + 1);
+        const size_t dot = name.rfind('.');
+        if (dot != std::string::npos) name = name.substr(0, dot);
+        if (cfg.horde) {
+            std::lock_guard<std::mutex> lock(cfg.horde->mutex);
+            cfg.horde->map_advance = true;
+        }
+        system_chat("Map advance: " + name + " stands next - leave and press "
+                     "Tower Defense to play it.", p.id);
     }
 
     // One frame of teeth, or of the spade: the swing the clients animate,
@@ -4916,8 +4948,12 @@ struct Server::Impl {
                 turret_command(p, text);
             } else if (horde_mode() && text.rfind("/core", 0) == 0) {
                 core_command(p, text);
+            } else if (horde_mode() &&
+                       (text == "/va" || text == "/mapadvance")) {
+                map_advance_command(p);
             } else if (horde_mode())
-                system_chat("Commands here: /clearwave, /kill, /turret, /core", p.id);
+                system_chat("Commands here: /clearwave, /kill, /turret, "
+                            "/core, /va", p.id);
             else system_chat(aim_mode() ? "Commands here: /restart, /kill"
                                         : "Commands here: /kill", p.id);
             return;

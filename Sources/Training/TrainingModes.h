@@ -99,4 +99,12 @@ struct AimShared {
     bool restart = false;     // the client asks for another run
 };
 
+// Horde: same sharing, for the map the mode plays next. The server side
+// arms /va (the map after this one); the menu thread reads and clears it
+// when the mode starts again, and cannot swap a map mid-game.
+struct HordeShared {
+    std::mutex mutex;
+    bool map_advance = false; // /va asked for the next map of the roster
+};
+
 }  // namespace training

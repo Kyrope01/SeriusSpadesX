@@ -803,11 +803,15 @@ struct Server::Impl {
 
     // The settings the mode's own maps carry, the pyspades flavour: a
     // Python-flavoured literal whose extensions dict is the one part read.
-    // Keys are quoted words, every value a number, a quoted word, or a list
-    // of numbers; the file's own name and description are passed over
-    // unread (a quote inside a quoted word would lie to a simpler reader),
-    // and so is any key the host does not owe. Nothing is owed: a map
-    // without the file, or without a key, keeps what it already stood on.
+    // Keys are quoted words or bare words - a hand that skips the quotes
+    // loses nothing, Python reads a bare word the same - and every value
+    // a number, a bare true or false, a quoted word, or a list of numbers;
+    // the name and the description of the file itself pass over unread (a
+    // quote inside a quoted word would lie to a simpler reader), and so is
+    // any key the host does not owe. Nothing is owed: a map without the
+    // file, or without a key, keeps what it already stood on. A dict that
+    // closes early on a sign the reader cannot take says so, for a quiet
+    // half read in a field log reads like settings that were never there.
     // The core_position the vocabulary knows is a cell of the map, and it
     // may name the core's foot besides: a third number is the layer the
     // bottom block of its column stands in (61, say, on the bedrock of a
@@ -859,25 +863,43 @@ struct Server::Impl {
             return;
         }
         size_t i = dict + 1;
+        int keys_read = 0;
         for (;;) {
             while (i < text.size() && (blank(text[i]) || text[i] == ',')) ++i;
             if (i >= text.size() || text[i] == '}') break;
-            if (text[i] != '\'' && text[i] != '"') break;
-            const char quote = text[i++];
-            std::string key;
-            while (i < text.size() && text[i] != quote) {
-                if (text[i] == '\\' && i + 1 < text.size()) {
-                    ++i;
-                    key += text[i];
-                } else {
-                    key += text[i];
-                }
-                ++i;
+            // A comment the map maker left inside speaks Python: the
+            // rest of its own line stays unread, the keys around it live.
+            if (text[i] == '#') {
+                while (i < text.size() && text[i] != '\n') ++i;
+                continue;
             }
-            if (i >= text.size()) break;
-            ++i;
+            std::string key;
+            if (text[i] == '\'' || text[i] == '"') {
+                const char quote = text[i++];
+                while (i < text.size() && text[i] != quote) {
+                    if (text[i] == '\\' && i + 1 < text.size()) {
+                        ++i;
+                        key += text[i];
+                    } else {
+                        key += text[i];
+                    }
+                    ++i;
+                }
+                if (i >= text.size()) break;
+                ++i;
+            } else if (word_char(text[i])) {
+                // A bare word stands where Python needs no quote: the
+                // hand that writes the settings this way loses nothing.
+                while (i < text.size() && word_char(text[i])) {
+                    key += text[i];
+                    ++i;
+                }
+            } else {
+                break;
+            }
             while (i < text.size() && blank(text[i])) ++i;
-            if (i >= text.size() || text[i] != ':') break;
+            if (i >= text.size() || (text[i] != ':' && text[i] != '='))
+                break;
             ++i;
             while (i < text.size() && blank(text[i])) ++i;
             std::vector<double> ns;
@@ -956,9 +978,18 @@ struct Server::Impl {
                        !blank(text[end]))
                     ++end;
                 const std::string cut = trimmed(text.substr(i, end - i));
-                if (!cut.empty()) ns.push_back(std::strtod(cut.c_str(), nullptr));
+                // A bare true or false - the plain words a hand would
+                // sooner write than a number - stand for one and nought.
+                const std::string cut_l = lowered(cut);
+                if (cut_l == "true")
+                    ns.push_back(1.0);
+                else if (cut_l == "false")
+                    ns.push_back(0.0);
+                else if (!cut.empty())
+                    ns.push_back(std::strtod(cut.c_str(), nullptr));
                 i = end;
             }
+            ++keys_read;
             const std::string key_l = lowered(key);
             // The sites the map names its zombie fronts at, site by
             // site: a pair names a cell, a triple names the ground
@@ -984,6 +1015,15 @@ struct Server::Impl {
                 map_probe = ns[0] >= 0.5 ? 1 : 0;
             }
         }
+        // A dict that closes early - one stray sign and the rest of it
+        // dies unread - says so here, loud: the half the reader kept
+        // would pass for settings otherwise, and the quiet loss takes a
+        // whole session of field logs to find.
+        const bool closed_early = i < text.size() && text[i] != '}';
+        if (closed_early)
+            log("map settings: the extensions dict closed early: "
+                "%d keys stood",
+                keys_read);
         if (!map_spawn_x.empty())
             log("map settings: %d zombie spawn sites named",
                 static_cast<int>(map_spawn_x.size()));

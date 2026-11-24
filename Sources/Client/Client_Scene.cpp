@@ -26,6 +26,7 @@
 #include "Client.h"
 
 #include <Core/ConcurrentDispatch.h>
+#include <Core/FileManager.h>
 #include <Core/Settings.h>
 #include <Core/Strings.h>
 
@@ -587,6 +588,35 @@ namespace spades {
 				return; // work-around for water refraction problem
 
 			Handle<IModel> model = renderer->RegisterModel("Models/Weapons/Grenade/Grenade.kv6");
+			// A thrower drawn in a model set of its own flies its set
+			// grenade too. The file the set lays out for the held one
+			// stands here as well (Tool/Grenade.kv6, or the own
+			// Grenade/Grenade.kv6), the usual one when the set keeps
+			// none: the green sets spit their skin flying.
+			const int throwerId = g.GetOwnerId();
+			if (throwerId >= 0 &&
+			    static_cast<size_t>(throwerId) < clientPlayers.size()) {
+				ClientPlayer *thrower =
+				  clientPlayers[static_cast<size_t>(throwerId)]
+				    .GetPointerOrNull();
+				if (thrower) {
+					const std::string set = thrower->OutfitFolder();
+					if (!set.empty()) {
+						static const char *const kPaths[2] = {
+						  "Tool/Grenade.kv6", "Grenade/Grenade.kv6"};
+						Handle<IModel> own;
+						for (const char *part : kPaths) {
+							const std::string path = set + part;
+							if (FileManager::FileExists(path.c_str())) {
+								own = renderer->RegisterModel(path.c_str());
+								break;
+							}
+						}
+						if (own)
+							model = own;
+					}
+				}
+			}
 
 			// Move the grenade slightly so that it doesn't look like sinking in the ground
 			Vector3 position = g.GetPosition();

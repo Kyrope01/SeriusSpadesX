@@ -4103,7 +4103,35 @@ struct Server::Impl {
     // painted green that melts, not a crater that blasts. The teeth
     // answer anything too close, as any walker.
     void spitter_tick(Player& p) {
-        if (p.brute != kSpitter || world_time < p.next_spit) return;
+        if (p.brute != kSpitter) return;
+        // The probe of the breath: one line a beat while the debug speaks,
+        // the one reading a quiet spitter wants first - the person the
+        // spit would land nearest, the band the tuning asks of them, and
+        // how long the next spit sits in its clock.
+        if (map_probe && world_time - p.probe_at >= kProbeAgain) {
+            p.probe_at = world_time;
+            float pd2 = -1.0f;
+            for (auto& qq : players) {
+                if (!qq || qq->zombie || !qq->alive ||
+                    qq->team != kPeople) continue;
+                const float ndx = qq->body.pos.x - p.body.pos.x;
+                const float ndy = qq->body.pos.y - p.body.pos.y;
+                const float dd2 = ndx * ndx + ndy * ndy;
+                if (pd2 < 0.0f || dd2 < pd2) pd2 = dd2;
+            }
+            const float wait = static_cast<float>(
+                std::max(0.0, p.next_spit - world_time));
+            if (pd2 >= 0.0f)
+                log("spitter %d probe: person at %.1f blocks"
+                    " (band %d to %d), next spit in %.1f s",
+                    p.id, std::sqrt(pd2), spitter.min_range,
+                    spitter.range, wait);
+            else
+                log("spitter %d probe: nobody living to spit at"
+                    ", next spit in %.1f s",
+                    p.id, wait);
+        }
+        if (world_time < p.next_spit) return;
         Player* t = nullptr;
         float best = static_cast<float>(spitter.range);
         const float px = p.body.pos.x, py = p.body.pos.y;

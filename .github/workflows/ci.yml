@@ -326,9 +326,10 @@ jobs:
       - name: Add the game data
         run: |
           mkdir -p build/bin/Resources
-          for pak in pak002-Base pak005-Models pak010-BaseSkin pak050-Locales pak999-References; do
+          for pak in pak002-Base pak005-Models pak006-TowerDefense pak010-BaseSkin pak050-Locales pak999-References; do
             cp "build/Resources/$pak.pak" build/bin/Resources/
           done
+          cp towerdefense.toml build/bin/
           ls -la build/bin build/bin/Resources
 
       - name: Upload artifacts

@@ -26,6 +26,13 @@ Sounds/Feedback Sounds/Misc Sounds/Player Sounds/Effects Textures $ZIPARGS > "$L
 
 zip -r "$OUTPUT_DIR/pak005-Models.pak" Maps Models/MapObjects Models/Player Models/Effects $ZIPARGS > "$LOG_FILE"
 
+# Tower Defense rides a pak of its own, packed straight from the mode
+# folder below: everything the folder carries ships as pak006, while
+# the game paks above stay free of it.
+pushd TowerDefense > /dev/null
+zip -r "$OUTPUT_DIR/pak006-TowerDefense.pak" Maps Models Sounds > "$LOG_FILE"
+popd > /dev/null
+
 zip -r "$OUTPUT_DIR/pak010-BaseSkin.pak" \
 License/Credits-pak010-BaseSkin.md \
 Scripts/Skin Sounds/Weapons Models/Weapons $ZIPARGS > "$LOG_FILE"

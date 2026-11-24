@@ -1,6 +1,7 @@
 set(COMPILED_PAK_FILES
 	${CMAKE_CURRENT_BINARY_DIR}/pak002-Base.pak
 	${CMAKE_CURRENT_BINARY_DIR}/pak005-Models.pak
+	${CMAKE_CURRENT_BINARY_DIR}/pak006-TowerDefense.pak
 	${CMAKE_CURRENT_BINARY_DIR}/pak010-BaseSkin.pak
 	${CMAKE_CURRENT_BINARY_DIR}/pak050-Locales.pak
 	${CMAKE_CURRENT_BINARY_DIR}/pak999-References.pak)
@@ -50,6 +51,7 @@ if(ZEROSPADES_RESOURCES)
 		${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.vk.fs
 		${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.vk.program)
 	file(GLOB_RECURSE SOUND_FILES ${CMAKE_CURRENT_SOURCE_DIR}/Sounds/*)
+	file(GLOB_RECURSE TOWERDEFENSE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/TowerDefense/*)
 	file(GLOB_RECURSE TEXTURE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/Textures/*)
 
 	# Compile Vulkan GLSL shaders to SPIR-V at build time
@@ -158,7 +160,7 @@ if(ZEROSPADES_RESOURCES)
 	set(PAK_IN_FILES
 		${GFX_FILES} ${LICENSE_FILES} ${LOCALE_FILES} ${MAP_FILES}
 		${MODEL_FILES} ${SCRIPT_FILES} ${SHADER_FILES} ${SOUND_FILES}
-		${TEXTURE_FILES} ${COMPILED_SPIRV_FILES})
+		${TEXTURE_FILES} ${TOWERDEFENSE_FILES} ${COMPILED_SPIRV_FILES})
 
 	source_group("Gfx" FILES ${GFX_FILES})
 	source_group("License Texts" FILES ${LICENSE_FILES})
@@ -168,6 +170,7 @@ if(ZEROSPADES_RESOURCES)
 	source_group("Scripts" FILES ${SCRIPT_FILES})
 	source_group("Shaders" FILES ${SHADER_FILES})
 	source_group("Sounds" FILES ${SOUND_FILES})
+	source_group("TowerDefense" FILES ${TOWERDEFENSE_FILES})
 	source_group("Textures" FILES ${TEXTURE_FILES})
 
 	add_custom_target(ZeroSpades_Resources ALL
@@ -212,6 +215,12 @@ if(ZEROSPADES_RESOURCES)
 				${CMAKE_COMMAND} -E copy_if_different
 					${COMPILED_PAK_FILES}
 					${CMAKE_BINARY_DIR}/bin/$<CONFIGURATION>/Resources)
+			# the tower defense tuning rides beside the exe, where the
+			# mode reads it
+			COMMAND
+				${CMAKE_COMMAND} -E copy_if_different
+					${CMAKE_SOURCE_DIR}/towerdefense.toml
+					${CMAKE_BINARY_DIR}/bin/$<CONFIGURATION>/towerdefense.toml)
 	endif (WIN32 AND MSVC)
 endif()
 

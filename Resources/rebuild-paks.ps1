@@ -16,10 +16,9 @@
 #   3. creates <GameDir>\UserResources if absent: the game then runs in its
 #      portable mode, its settings and logs beside the exe too - nothing is
 #      ever written to AppData;
-#   4. prints that the fresh paks stay clean of the tower defense assets;
-#      the mode's maps, turret models and sounds travel in the player's
-#      own pak, and a file that rode a game pak by mistake is seen here,
-#      not mid-game.
+#   4. prints what the fresh paks carry: the game paks stay clean of the
+#      tower defense, and the mode's own pak006 carries its map, turret
+#      models and sounds - so a missing asset is seen here, not mid-game.
 # This script itself never reads or writes AppData. When the old AppData
 # spot holds paks of an earlier install, the game looks there first and they
 # win over these: they are reported below and left for a hand to remove.
@@ -120,13 +119,25 @@ if (Test-Path -LiteralPath $OldPaks) {
 }
 
 Write-Host "== What the paks now carry"
-ForEach ($Name in @("pak002-Base.pak", "pak005-Models.pak")) {
+ForEach ($Name in @("pak002-Base.pak", "pak005-Models.pak", "pak006-TowerDefense.pak")) {
     $Pak = Join-Path $Target $Name
     if (-not (Test-Path -LiteralPath $Pak)) { continue }
     $Zip = [IO.Compression.ZipFile]::OpenRead($Pak)
     $Entries = @($Zip.Entries | ForEach-Object { $_.FullName.Replace("\", "/") })
     $Zip.Dispose()
-    if ($Name -eq "pak002-Base.pak") {
+    if ($Name -eq "pak006-TowerDefense.pak") {
+        $Map = $Entries -contains "Maps/Termina_FieldsTD.vxl"
+        $Txt = $Entries -contains "Maps/Termina_FieldsTD.txt"
+        $Kv6 = @($Entries | Where-Object { $_ -like "Models/Turrets/*.kv6" }).Count
+        $Snd = @($Entries | Where-Object { $_ -like "Sounds/Turrets/*" }).Count
+        $Report = "map: "
+        if ($Map) { $Report = $Report + "present" } else { $Report = $Report + "MISSING" }
+        $Report = $Report + ", settings txt: "
+        if ($Txt) { $Report = $Report + "present" } else { $Report = $Report + "MISSING" }
+        $Report = $Report + ", turret models: " + $Kv6 + ", sounds: " + $Snd + " (6 and 13 expected)"
+        if (($Map) -and ($Txt) -and ($Kv6 -eq 6) -and ($Snd -eq 13)) { $Report = $Report + " OK" } else { $Report = $Report + " - CHECK" }
+        Write-Host ("   " + $Name + ": " + $Report)
+    } elseif ($Name -eq "pak002-Base.pak") {
         $Snd = @($Entries | Where-Object { $_ -like "Sounds/Turrets/*" }).Count
         $SndS = "tower defense sounds: " + $Snd + " files (0 expected; the player pak carries them)"
         if ($Snd -eq 0) { $SndS = $SndS + " OK" } else { $SndS = $SndS + " - CHECK" }

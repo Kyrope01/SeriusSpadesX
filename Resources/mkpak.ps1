@@ -13,7 +13,7 @@ $SourceDirectory = Split-Path -Parent $PSCommandPath
 
 function Make-Pak
 {
-	param( [String[]] $RelativePaths, [String] $PakName )
+	param( [String[]] $RelativePaths, [String] $PakName, [String] $SourceSub = "" )
 
 	Echo "Creating $($PakName)..."
 
@@ -26,6 +26,11 @@ function Make-Pak
 
 	# TODO: exclude _Assets_ and .DS_Store
 
+	# A pak may pack a folder of its own - Tower Defense packs the
+	# mode folder - so the zip keeps the paths the game mounts while
+	# the files themselves rest where they rest.
+	$PakSource = if ($SourceSub -eq "") { $SourceDirectory } else { Join-Path $SourceDirectory $SourceSub }
+
 	# Copy target files to the temporary directory
 	ForEach ($RelativePath in $RelativePaths) {
 		# Create the parent directory if it doesn't exist
@@ -35,7 +40,7 @@ function Make-Pak
 		}
 
 		# Copy item
-		Copy-Item (Join-Path $SourceDirectory $RelativePath) `
+		Copy-Item (Join-Path $PakSource $RelativePath) `
 		  -Destination (Join-Path $TempDir $RelativePath) -Recurse
 	}
 
@@ -61,6 +66,9 @@ Make-Pak -PakName pak002-Base.pak -RelativePaths `
 
 Make-Pak -PakName pak005-Models.pak -RelativePaths `
   Maps, Models/MapObjects, Models/Player, Models/Effects
+
+Make-Pak -PakName pak006-TowerDefense.pak -SourceSub TowerDefense -RelativePaths `
+  Maps, Models/Turrets, Sounds/Turrets
 
 Make-Pak -PakName pak010-BaseSkin.pak -RelativePaths `
   License/Credits-pak010-BaseSkin.md,

@@ -388,6 +388,20 @@ public:
     // height is no part of it; the teeth add the column's level, the
     // host's zombie_at_core, so a walker stands ON things, not near them.
     bool near_core(int x, int y, int cells) const;
+    // The advice of the hunt: the same downhill read taken on a field
+    // the hunt owns, flooded from the person the host names by
+    // hunt_follow. The crossings and their prices are the same walk, so
+    // a hunter walks around a wall as the pack does, never through it.
+    // At the hunted cell no step helps; off the hunt field the advice
+    // heads straight for the person, terrain permitting - a slow press,
+    // not a standstill. False when no person is hunted, or nothing
+    // helps.
+    bool hunt_step(int x, int y, int& tx, int& ty);
+    // The person the hunt walks to, told every tick by the host: the
+    // field follows at its own cadence, one flood while the person
+    // keeps their cell, a flood the moment they take another. An
+    // invalid person stands the field down entirely.
+    void hunt_follow(int px, int py, double now);
 
     // The anchor the last wave walked in from at `corner`: on a map that
     // named its sites, the named ground itself - the first cell the walk
@@ -462,6 +476,8 @@ private:
     int surf_count(int x, int y);
     int surface(int x, int y, int k);
     int best_state(int x, int y) const;
+    // The best surface of the hunt, the same read on the hunt field.
+    int best_hunt_state(int x, int y) const;
     // The dig walk's own read of the same two: the surface with the lowest
     // dig distance, and the reached floor that meets the feet at z.
     int best_dig_state(int x, int y) const;
@@ -482,7 +498,8 @@ private:
     // has no voxels past its edges, so a border cell's missing side is sky.
     bool box_clear(int x, int y, int z) const;
     bool reach_spawn(const std::vector<int32_t>& dist) const;
-    void flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig);
+    void flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig,
+               int seed_x = -1, int seed_y = -1);
     // The asked-for centres, dealt at the horde's birth and again the
     // moment each wave falls when roam_spawns is on: the corners'
     // quarters shuffle round the compass and each centre is drawn
@@ -516,6 +533,15 @@ private:
     // on the crossings between them. Its distance is never higher than
     // the legs' own, and it is only read on the licences of the pinned.
     std::vector<int32_t> dig_dist_;
+    // The hunt field: the same surfaces, the same prices, flooded from
+    // the person the host names instead of the core, at most once each
+    // kHuntRefresh while the person holds their cell, and the moment
+    // they take another. One walk for every hunter, as the core field
+    // is one walk for every grunt.
+    std::vector<int32_t> hunt_dist_;
+    int hunt_x_ = -1, hunt_y_ = -1;
+    double hunt_at_ = -1e9;
+    static constexpr double kHuntRefresh = 1.0;
     std::vector<int16_t> surf_z_;
     std::vector<int8_t> surf_n_;
     bool field_dirty_ = false;

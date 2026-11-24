@@ -127,6 +127,22 @@ int Horde::best_state(int x, int y) const {
     return bk;
 }
 
+// The best surface of the hunt: the lowest of the hunt distances the
+// column carries. The field is empty until a hunt names a person, and
+// no column is asked before one does.
+int Horde::best_hunt_state(int x, int y) const {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return -1;
+    if (hunt_dist_.empty()) return -1;
+    int best = kUnreachable, bk = -1;
+    const int32_t* d = &hunt_dist_[cell_index(x, y) * kSurfMax];
+    for (int k = 0; k < kSurfMax; ++k)
+        if (d[k] != kUnreachable && (best == kUnreachable || d[k] < best)) {
+            best = d[k];
+            bk = k;
+        }
+    return bk;
+}
+
 // The dig walk's own two reads of the same: best_dig_state the surface of
 // the lowest dig distance, near_dig_state the reached floor that meets
 // the feet at z. The dig field reaches everywhere the legs' field does
@@ -250,7 +266,8 @@ int Horde::stand_floor(int x, int y) const {
 // on them. Every surface of a cell is a state of its
 // own: which floor a walker stands on is decided where it crosses, not
 // where it starts.
-void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig) {
+void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y,
+                   bool dig, int seed_x, int seed_y) {
     dist.assign(static_cast<size_t>(kMapW) * kMapH * kSurfMax, kUnreachable);
     const int cx = cfg_.core_x, cy = cfg_.core_y;
     if (cx < 0 || cx >= kMapW || cy < 0 || cy >= kMapH) return;
@@ -278,6 +295,16 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
     auto seed = [&](int x, int y, int d) {
         for (int k = 0; k < surf_count(x, y); ++k) seed_one(x, y, k, d);
     };
+    // A hunt seeds this differently: the hunted person stands wherever
+    // they stand, level or hilltop, every surface of their column
+    // joins at zero, and the blanket of their four neighbours joins at
+    // one - the walk to them spreads from wherever they stand, and
+    // the prices of the crossings make the rest of the way honest.
+    if (seed_x >= 0 && seed_y >= 0) {
+        seed(seed_x, seed_y, 0);
+        for (int k = 0; k < 4; ++k)
+            seed(seed_x + kDx[k], seed_y + kDy[k], 1);
+    } else {
     // The core's own floors, the ones the walk starts on: every surface
     // of its column, as it always was - save when the host named the
     // marker's top layer: then only the floors at that level do. A cave
@@ -343,6 +370,7 @@ void Horde::flood(std::vector<int32_t>& dist, int block_x, int block_y, bool dig
             if (deep >= 0) seed_one(nx, ny, deep, 1);
         }
     }
+    }   // the hunt seeds closed; the core seeds close above
     while (!open.empty()) {
         const QE top = open.top();
         open.pop();
@@ -473,6 +501,9 @@ void Horde::recompute() {
     flood(dist_, -1, -1, false);
     flood(dig_dist_, -1, -1, true);
     field_dirty_ = false;
+    // The hunt walk goes stale in the same breath: the next hunt_follow
+    // floods it from wherever its person stands on the new ground.
+    hunt_at_ = -1e9;
     // The reading on the old field is stale now: the next waiting tick
     // (or the next wave) reads the anchors off this one again.
     scouted_ = false;
@@ -574,6 +605,107 @@ bool Horde::next_step(int x, int y, int& tx, int& ty) {
     tx = bx;
     ty = by;
     return true;
+}
+
+// The advice of the hunt: the same weighing read the pack next_step
+// makes, taken on the hunt field - the neighbour of the lowest hunt
+// distance the footing of the walker prices cheapest, so the walk
+// around a wall is the walk to the person wherever the map keeps one.
+// At the hunted cell no step helps: the teeth and the pool are the
+// business of the hunter there. Off the field, straight for the person,
+// terrain permitting - the errand still runs, and silence is a press,
+// not a standstill. False when no person is hunted, nowhere is stood,
+// or nothing helps: the host stands its own answers on that.
+bool Horde::hunt_step(int x, int y, int& tx, int& ty) {
+    if (hunt_x_ < 0 || hunt_y_ < 0) return false;
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return false;
+    if (surf_count(x, y) <= 0) return false;  // nowhere to stand
+    const int bk = best_hunt_state(x, y);
+    const int here = bk < 0 ? kUnreachable
+                            : hunt_dist_[cell_index(x, y) * kSurfMax + bk];
+    const int z = surface(x, y, bk < 0 ? 0 : bk);
+    static const int kDx[4] = {1, -1, 0, 0};
+    static const int kDy[4] = {0, 0, 1, -1};
+    const uint64_t room =
+        ((1ull << Config::kStandHead) - 1ull) << (z - Config::kStandHead);
+    const uint64_t side_ax = map_.column(x, y + 1);
+    const uint64_t side_bx = map_.column(x, y - 1);
+    const uint64_t side_ay = map_.column(x + 1, y);
+    const uint64_t side_by = map_.column(x - 1, y);
+    int best = -1, bx = -1, by = -1;
+    for (int k = 0; k < 4; ++k) {
+        const int nx = x + kDx[k], ny = y + kDy[k];
+        if (nx < 0 || nx >= kMapW || ny < 0 || ny >= kMapH) continue;
+        const int base = cell_index(nx, ny) * kSurfMax;
+        for (int m = 0; m < surf_count(nx, ny); ++m) {
+            const int nd = hunt_dist_[base + m];
+            if (nd < 0) continue;
+            const int dz = surface(nx, ny, m) - z;
+            if (dz > Config::kWalkClimb || dz < -Config::kWalkClimb) continue;
+            int price = 1 + Config::kLevelShy * (dz < 0 ? -dz : dz);
+            if (dz == -Config::kWalkClimb || dz == Config::kWalkClimb)
+                price += Config::kJumpShy;
+            if (kDx[k] != 0) {
+                if (side_ax & room) price += kWallShy;
+                if (side_bx & room) price += kWallShy;
+            } else {
+                if (side_ay & room) price += kWallShy;
+                if (side_by & room) price += kWallShy;
+            }
+            const int score = nd + price;
+            if (here >= 0 && score > here) continue;
+            if (best < 0 || score < best) {
+                best = score;
+                bx = nx;
+                by = ny;
+            }
+        }
+    }
+    if (here == 0) return false;   // at the person: its own business
+    if (bx < 0) {
+        if (x == hunt_x_ && y == hunt_y_) return false;
+        const int sx = std::abs(hunt_x_ - x) >= std::abs(hunt_y_ - y)
+                          ? (hunt_x_ > x ? 1 : -1) : 0;
+        const int sy = sx == 0 ? (hunt_y_ > y ? 1 : -1) : 0;
+        if (sx != 0 && surf_count(x + sx, y) > 0) {
+            tx = x + sx;
+            ty = y;
+            return true;
+        }
+        if (sy != 0 && surf_count(x, y + sy) > 0) {
+            tx = x;
+            ty = y + sy;
+            return true;
+        }
+        if (sx != 0 && surf_count(x, y + (hunt_y_ > y ? 1 : -1)) > 0) {
+            tx = x;
+            ty = y + (hunt_y_ > y ? 1 : -1);
+            return true;
+        }
+        return false;
+    }
+    tx = bx;
+    ty = by;
+    return true;
+}
+
+// The hunt field follows the person the host names: a flood each cell
+// the person takes, and one a second while they hold it. The edits of
+// the map stale the walk with everything else, the shared recompute does
+// the standing of it, and an unnamed person stands the field down so
+// the hunters read silence and press their own way.
+void Horde::hunt_follow(int px, int py, double now) {
+    if (px < 0 || py < 0 || px >= kMapW || py >= kMapH) {
+        hunt_x_ = -1;
+        hunt_y_ = -1;
+        return;
+    }
+    if (px == hunt_x_ && py == hunt_y_ &&
+        now - hunt_at_ < kHuntRefresh) return;
+    hunt_x_ = px;
+    hunt_y_ = py;
+    hunt_at_ = now;
+    flood(hunt_dist_, -1, -1, false, px, py);
 }
 
 // The standing surface of the column the walk has reached that meets the

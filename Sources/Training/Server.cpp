@@ -243,6 +243,10 @@ constexpr float kPackCatch = 0.8f;
 // the common answer every walker already owes.
 constexpr float kHuntSprint = 6.0f;
 constexpr float kBreakerCharge = 24.0f;
+// The stand of the Spitter: the acid works from its own ground, and the
+// walker keeps this stand off the hunted, in and out of the field,
+// while the pool and the arc do the closing.
+constexpr float kSpitHold = 10.0f;
 
 // A print stepped past at this width of its side is trodden too. The
 // half-pace disc catches a walker that comes to its print - but a heel at
@@ -713,7 +717,7 @@ struct SpecialTuning {
 struct SpitterTuning {
     double every = 5.0;    // seconds between its spits
     int range = 30;        // blocks it picks its person from
-    int min_range = 6;     // blocks under which the teeth answer
+    int min_range = 3;     // under this the teeth answer, not the pool
     double lag = 0.5;      // seconds back its aim is read at
     double to_people = 0.15;   // of a grenade hurt on people
     double melt = 2.5;     // seconds after landing the ground melts
@@ -1286,6 +1290,9 @@ struct Server::Impl {
     // zombie_spawn_position key): the fronts come from these cells, in
     // the order the file lists them, and no site is added beyond them.
     std::vector<int> map_spawn_x, map_spawn_y, map_spawn_z;
+    // The person the hunters all walk to, the one the hunt field floods
+    // from - named afresh by the hunting horde each tick it ticks.
+    Player* hunt_focus_ = nullptr;
     std::unique_ptr<horde::Horde> horde;
     horde::Phase horde_told = horde::Phase::Prep;
     int horde_wave_told = 0;
@@ -3389,36 +3396,37 @@ struct Server::Impl {
         if (!sky) p.input.jump = true;
     }
 
-    // The hunt of the Spitter and the Leaper: the road to the core is
-    // not theirs to walk and no advice of the horde bends them, for the
-    // nearest living person is the road, read fresh every window - one
-    // down and the hunt shifts to the one beside them in a breath. The
-    // feet aim where the person stands and press: bodies pass through
-    // bodies here, and so a press is a dance about the feet the teeth
-    // find, the run running while the way is long. A stair is hopped on
-    // the way past; a wall pins the hunt as it pins any walker, and the
-    // common answers hold - the hop, the fling - all but the road: the
-    // last mercy rides the walk to the core, and the hunt never rides.
+    // The hunt of the Spitter and the Leaper: the person the horde
+    // names is the road, and the walk to them is the same walk the
+    // horde walks to the core - a field of this hunt, flooded
+    // from the person it names and refreshed while they hunt - so the
+    // way past a wall is the way of the field, around and over and never
+    // through, as it never was for the pack. The word of the field
+    // steers first; the straight press at the person is the word a
+    // walker falls back to where the field holds its silence. The
+    // Leaper presses the whole way, to the teeth; the Spitter holds
+    // its own ground inside the reach of the spit and lets the acid close.
+    // A stair either way is hopped where the face reads it, and the
+    // common answers hold - the hop, the fling - all but the road:
+    // the mercy rides the walk to the core, and the hunt never rides.
     void hunt_tick(Player& p, int cx, int cy, int fz) {
-        Player* t = nullptr;
-        float bd = -1.0f;
-        for (auto& qq : players) {
-            if (!qq || qq.get() == &p || qq->zombie || !qq->alive ||
-                qq->spectator() || qq->team != kPeople) continue;
-            const float dx = qq->body.pos.x - p.body.pos.x;
-            const float dy = qq->body.pos.y - p.body.pos.y;
-            const float d2 = dx * dx + dy * dy;
-            if (t == nullptr || d2 < bd) {
-                bd = d2;
-                t = qq.get();
-            }
-        }
-        if (t == nullptr) return;   // nobody living: the hunt stands
+        const Player* t = hunt_focus_;
+        if (t == nullptr || !t->alive) return;   // nobody: the hunt stands
         const float dx = t->body.pos.x - p.body.pos.x;
         const float dy = t->body.pos.y - p.body.pos.y;
         const float d = std::sqrt(dx * dx + dy * dy);
-        if (d > 1e-3f) p.body.ori = Vec3{dx / d, dy / d, 0.0f};
-        p.input.mf = true;
+        int hx = cx, hy = cy;
+        if (horde->hunt_step(cx, cy, hx, hy)) {
+            const float ax = static_cast<float>(hx) + 0.5f -
+                             p.body.pos.x;
+            const float ay = static_cast<float>(hy) + 0.5f -
+                             p.body.pos.y;
+            const float al = std::sqrt(ax * ax + ay * ay);
+            if (al > 1e-3f) p.body.ori = Vec3{ax / al, ay / al, 0.0f};
+        } else if (d > 1e-3f) {
+            p.body.ori = Vec3{dx / d, dy / d, 0.0f};
+        }
+        p.input.mf = p.brute == kLeaper || d > kSpitHold;
         p.input.sprint = d > kHuntSprint;
         if (!p.body.airborne) hop_step(p, cx, cy, fz);
     }
@@ -4134,6 +4142,9 @@ struct Server::Impl {
         bw.write_vec(src);
         bw.write_vec(vel);
         broadcast(bw, false);
+        if (map_probe)
+            log("spitter %d spat, flight %.2f, landing %.1f, %.1f, %.1f",
+                p.id, flight, at.pos.x, at.pos.y, at.pos.z);
         p.next_spit = world_time + spitter.every;
     }
     // Where a wave comes from, while it comes: the same ping the tutorial's
@@ -4485,6 +4496,44 @@ struct Server::Impl {
     // The wave's announcements, its spawns, and its dead slots given back.
     void horde_tick() {
         horde->tick(world_time);
+        // The focus of the hunt: the person the hunters hold nearest most
+        // between them - one name for the one field every hunter walks,
+        // read fresh every tick. Nobody hunting or nobody living means
+        // no name, and the field stands down and the hunters stand.
+        hunt_focus_ = nullptr;
+        std::vector<int> votes(players.size(), 0);
+        for (auto& z : players) {
+            if (!z || !z->alive || !z->zombie) continue;
+            if (z->brute != kSpitter && z->brute != kLeaper) continue;
+            Player* t = nullptr;
+            float bd = -1.0f;
+            for (auto& qq : players) {
+                if (!qq || qq->zombie || !qq->alive || qq->spectator() ||
+                    qq->team != kPeople) continue;
+                const float ddx = qq->body.pos.x - z->body.pos.x;
+                const float ddy = qq->body.pos.y - z->body.pos.y;
+                const float dd2 = ddx * ddx + ddy * ddy;
+                if (t == nullptr || dd2 < bd) {
+                    bd = dd2;
+                    t = qq.get();
+                }
+            }
+            if (t != nullptr) ++votes[static_cast<size_t>(t->id)];
+        }
+        int focus_votes = 0;
+        for (size_t i = 0; i < players.size(); ++i) {
+            if (votes[i] > focus_votes) {
+                focus_votes = votes[i];
+                hunt_focus_ = players[i].get();
+            }
+        }
+        if (hunt_focus_ != nullptr)
+            horde->hunt_follow(
+                static_cast<int>(std::floor(hunt_focus_->body.pos.x)),
+                static_cast<int>(std::floor(hunt_focus_->body.pos.y)),
+                world_time);
+        else
+            horde->hunt_follow(-1, -1, world_time);
         // The safety net: the rare wave that neither falls nor wins
         // would hold the game hostage - once the clock the wave was
         // born holding runs out, the net takes it here, and the clear

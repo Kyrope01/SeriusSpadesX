@@ -120,6 +120,27 @@ namespace spades {
 					line.first + d * t1
 				);
 			}
+
+			// The dress of each of the horde: a Spitter reads green, a
+			// Leaper red, a Toppler blue, a Caller purple, a Breaker
+			// yellow; the plain walking dead stays gray. The outfit the
+			// server dresses a zombie in says which is which.
+			IntVector3 ZombieDressColor(int outfit) {
+				switch (outfit) {
+					case PlayerOutfits::Spitter:
+						return MakeIntVector3(110, 235, 110);
+					case PlayerOutfits::Leaper:
+						return MakeIntVector3(255, 110, 110);
+					case PlayerOutfits::Caller:
+						return MakeIntVector3(200, 110, 255);
+					case PlayerOutfits::Breaker:
+						return MakeIntVector3(255, 215, 90);
+					case PlayerOutfits::Toppler:
+						return MakeIntVector3(110, 170, 255);
+					default:
+						return MakeIntVector3(170, 170, 170);
+				}
+			}
 		} // namespace
 
 		MapView::MapView(Client* c, bool largeMap)
@@ -724,7 +745,6 @@ namespace spades {
 
 			const auto& spectatorColor = MakeIntVector3(200, 200, 200);
 			const auto& localPlayerColor = MakeIntVector3(0, 255, 255);
-			const auto& zombieColor = MakeIntVector3(170, 170, 170);
 			const auto& playerTextColor = MakeVector4(1, 1, 1, 0.75F * largeMapAlpha);
 
 			Handle<IImage> spectatorIcon = renderer.RegisterImage("Gfx/Map/Spectator.png");
@@ -747,13 +767,17 @@ namespace spades {
 				if (p.IsSpectator() || !p.IsAlive())
 					continue; // don't draw dead players or spectators
 
-				// A zombie is not a soldier on the map. It has no weapon to
-				// name, no team color to wear, and it hides from no one:
-				// the horde reads as plain gray circles, drawn for whoever
-				// is watching, on the minimap and on the large map alike.
+				// A zombie is not a soldier on the map. It has no weapon
+				// to name and it hides from no one: the horde reads as
+				// circles in the dress of each, the plain walking dead
+				// gray and the specials coloured, drawn for whoever is
+				// watching, on the minimap and on the large map alike.
 				if (p.IsZombie()) {
 					const auto& pos = p.GetPosition().GetXY();
-					DrawIcon(pos, *zombieIcon, ModifyColor(zombieColor) * largeMapAlpha);
+					const int dress = client->GetPlayerOutfits().GetOutfit(
+						p.GetId(), p.GetTeamId());
+					DrawIcon(pos, *zombieIcon,
+						ModifyColor(ZombieDressColor(dress)) * largeMapAlpha);
 					continue;
 				}
 
@@ -817,7 +841,9 @@ namespace spades {
 				if (!focusPlayerIsAlive) {
 					iconColor = MakeIntVector3(255, 255, 255);
 				} else if (focusPlayerIsZombie) {
-					iconColor = zombieColor;
+					iconColor = ZombieDressColor(
+						client->GetPlayerOutfits().GetOutfit(
+							focusPlayer->GetId(), focusPlayer->GetTeamId()));
 				} else if (focusPlayerIsLocal) {
 					iconColor = localPlayerIsSpectating ? spectatorColor : localPlayerColor;
 				} else if (colorMode) {

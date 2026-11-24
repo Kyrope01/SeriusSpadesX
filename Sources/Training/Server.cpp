@@ -237,6 +237,13 @@ constexpr uint8_t kAcidBlockId = 254;
 // at a stair, a bank, a sill, the pack crosses the way it always did.
 constexpr float kPackCatch = 0.8f;
 
+// The hunt and the charge, the measures of the brute minds: the run a
+// hunter runs while the hunted is a long way off, and the distance that
+// turns the charge back to a walk. The hop and the fling in between stay
+// the common answer every walker already owes.
+constexpr float kHuntSprint = 6.0f;
+constexpr float kBreakerCharge = 24.0f;
+
 // A print stepped past at this width of its side is trodden too. The
 // half-pace disc catches a walker that comes to its print - but a heel at
 // a run carries its own turning: it can cross the trail's end skimming
@@ -3333,6 +3340,153 @@ struct Server::Impl {
         p.input.jump = true;
     }
 
+    // A walker that walks out of the pack hands its line over, so the
+    // single file of the waves keeps both its shape and its road:
+    // whoever followed it follows whoever it followed, and the corner
+    // tail passes the same hand down. The brute was a door in the wall
+    // of the walk only while it walked the walk.
+    void hand_pack_over(Player& p) {
+        const int hand = p.ahead_id;
+        for (auto& qq : players) {
+            if (!qq || !qq->zombie || !qq->alive) continue;
+            if (qq->ahead_id != p.id) continue;
+            qq->ahead_id = hand;
+        }
+        if (p.spawn_corner >= 0 &&
+            pack_tail[p.spawn_corner] == p.id)
+            pack_tail[p.spawn_corner] = hand;
+        p.ahead_id = -1;
+    }
+
+    // The facing column of a walker, cast on the map: the column ahead on
+    // the axis its aim runs down, told at the foot, the head and the sky
+    // over it. The body is two blocks tall where it stands, so the foot
+    // and the head are the two cells the way ahead would have it walk
+    // into, and the sky is the third.
+    void face_ahead(Player& p, int cx, int cy, int fz,
+                    int& fx, int& fy, bool& foot, bool& head, bool& sky) {
+        int sx = 0, sy = 0;
+        if (std::fabs(p.body.ori.x) >= std::fabs(p.body.ori.y))
+            sx = p.body.ori.x > 0.0f ? 1 : -1;
+        else
+            sy = p.body.ori.y > 0.0f ? 1 : -1;
+        fx = cx + sx;
+        fy = cy + sy;
+        foot = map.solid(fx, fy, fz - 1);
+        head = map.solid(fx, fy, fz);
+        sky = map.solid(fx, fy, fz + 1);
+    }
+
+    // The hop the way ahead asks of any walker: a stair of one block or
+    // two under an open sky is taken the moment the face reads it, never
+    // held back for a stuck clock - a wall or a lip is not a stair, and
+    // the mind that walks the body answers those in its own words.
+    void hop_step(Player& p, int cx, int cy, int fz) {
+        int fx = 0, fy = 0;
+        bool foot = false, head = false, sky = false;
+        face_ahead(p, cx, cy, fz, fx, fy, foot, head, sky);
+        if (!foot && !head) return;
+        if (!sky) p.input.jump = true;
+    }
+
+    // The hunt of the Spitter and the Leaper: the road to the core is
+    // not theirs to walk and no advice of the horde bends them, for the
+    // nearest living person is the road, read fresh every window - one
+    // down and the hunt shifts to the one beside them in a breath. The
+    // feet aim where the person stands and press: bodies pass through
+    // bodies here, and so a press is a dance about the feet the teeth
+    // find, the run running while the way is long. A stair is hopped on
+    // the way past; a wall pins the hunt as it pins any walker, and the
+    // common answers hold - the hop, the fling - all but the road: the
+    // last mercy rides the walk to the core, and the hunt never rides.
+    void hunt_tick(Player& p, int cx, int cy, int fz) {
+        Player* t = nullptr;
+        float bd = -1.0f;
+        for (auto& qq : players) {
+            if (!qq || qq.get() == &p || qq->zombie || !qq->alive ||
+                qq->spectator() || qq->team != kPeople) continue;
+            const float dx = qq->body.pos.x - p.body.pos.x;
+            const float dy = qq->body.pos.y - p.body.pos.y;
+            const float d2 = dx * dx + dy * dy;
+            if (t == nullptr || d2 < bd) {
+                bd = d2;
+                t = qq.get();
+            }
+        }
+        if (t == nullptr) return;   // nobody living: the hunt stands
+        const float dx = t->body.pos.x - p.body.pos.x;
+        const float dy = t->body.pos.y - p.body.pos.y;
+        const float d = std::sqrt(dx * dx + dy * dy);
+        if (d > 1e-3f) p.body.ori = Vec3{dx / d, dy / d, 0.0f};
+        p.input.mf = true;
+        p.input.sprint = d > kHuntSprint;
+        if (!p.body.airborne) hop_step(p, cx, cy, fz);
+    }
+
+    // The Breaker: the core is the road entire, and the line between is
+    // walked as straight as the map allows the aim - no field, no
+    // advice, no detour a cliff asks for, and falls are walked honestly
+    // off every edge on the way. What stands on the line comes down: a
+    // stair of one or two is hopped, and the rest is carved standing at
+    // the face, the focus column and its two mates, the two blocks tall
+    // a body asks, onto rock only, a stroke a dig seconds - the air
+    // rides along unharmed and the core holds against every cell, for
+    // the teeth answer the core standing on its own ground, as they do
+    // for any walker that arrives. The charge sprints while the march
+    // is long, and walks the line in close.
+    void breaker_tick(Player& p, int cx, int cy, int fz) {
+        const float dx = static_cast<float>(horde_cfg.core_x) + 0.5f -
+                         p.body.pos.x;
+        const float dy = static_cast<float>(horde_cfg.core_y) + 0.5f -
+                         p.body.pos.y;
+        const float d = std::sqrt(dx * dx + dy * dy);
+        if (d > 1e-3f) p.body.ori = Vec3{dx / d, dy / d, 0.0f};
+        p.input.mf = true;
+        p.input.sprint = d > kBreakerCharge;
+        if (p.body.airborne) return;
+        int fx = 0, fy = 0;
+        bool foot = false, head = false, sky = false;
+        face_ahead(p, cx, cy, fz, fx, fy, foot, head, sky);
+        if (!foot && !head) return;   // the line is open: walk it
+        if (!sky) {
+            p.input.jump = true;   // a stair of one or two, hopped
+            return;
+        }
+        if (!horde_cfg.dig ||
+            world_time < p.spade_at + horde_cfg.dig_seconds) return;
+        // The stroke, standing at the face: the walker stops pressing
+        // and works, mates onto rock only, never the core column, and
+        // every voxel that comes off carries its own word to the wire.
+        p.input.mf = false;
+        const int lx = fx - cx != 0 ? 0 : 1;
+        const int ly = fx - cx != 0 ? 1 : 0;
+        bool stroked = false;
+        std::vector<Cell> removed;
+        for (int i = -1; i <= 1; ++i) {
+            const int bx = fx + lx * i;
+            const int by = fy + ly * i;
+            for (int z = foot ? fz - 1 : fz; z <= fz; ++z) {
+                if (!map.solid(bx, by, z)) continue;
+                if (core_column_cell(bx, by, z)) continue;
+                map.destroy_point(bx, by, z, &removed);
+                ByteWriter bw;
+                bw.write_u8(static_cast<uint8_t>(PacketId::BlockAction));
+                bw.write_u8(static_cast<uint8_t>(p.id));
+                bw.write_u8(static_cast<uint8_t>(kDestroyBlock));
+                bw.write_i32(bx);
+                bw.write_i32(by);
+                bw.write_i32(z);
+                broadcast(bw, true);
+                stroked = true;
+            }
+        }
+        if (stroked) {
+            touched(removed, false);
+            p.spade_at = world_time;
+            show_swing(p, horde_cfg.dig_seconds);
+        }
+    }
+
     // A zombie's mind: its pack walks one path - it holds at the heel of the
     // zombie in front, and the one at the head reads the field, towards the
     // core. The field is the walk without the spade - stairs, ramps and
@@ -3553,8 +3707,17 @@ struct Server::Impl {
             }
         } else {
             // Nobody to follow: it is the pack's leader now, and the field
-            // leads it - around the cliffs, when it can.
+            // leads it - around the cliffs, when it can - unless the walker
+            // is a brute of a mind of its own, whose road was never the
+            // walk: the hunt and the line hand the pack over first.
             p.ahead_id = -1;
+            if (p.brute == kSpitter || p.brute == kLeaper) {
+                hand_pack_over(p);
+                hunt_tick(p, cx, cy, fz);
+            } else if (p.brute == kBreaker) {
+                hand_pack_over(p);
+                breaker_tick(p, cx, cy, fz);
+            } else {
             int tx = cx, ty = cy, tz = fz;
             // The field read from the footing - and when the feet are in
             // the air, or on a floor the walk has no opinion about, the
@@ -3607,6 +3770,7 @@ struct Server::Impl {
                 if (from_footing)
                     vault_crossing(p, fz, tz, l);
             }
+            }   // the grunt walk ends; the brute minds closed above
         }
         // The shuffle apart, folded into the facing: a walker veers a step
         // out of a knot, a standstill in reach of its own becomes the
@@ -3810,7 +3974,12 @@ struct Server::Impl {
             // have all failed the head: the pinned line rides its road
             // down (teleport_pinned above, for the prose of it).
             if (p.ahead_id < 0 && p.stuck_at >= 0.0 &&
-                world_time - p.stuck_at >= kStuckTeleport)
+                world_time - p.stuck_at >= kStuckTeleport &&
+                // the mercy rides the road to the core, and the three
+                // minds that left the road never ride it back: the hunt
+                // stands its ground at a wall, and the breaker carves
+                p.brute != kSpitter && p.brute != kLeaper &&
+                p.brute != kBreaker)
                 teleport_pinned(p);
         }
     }

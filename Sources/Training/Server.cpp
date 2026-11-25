@@ -245,8 +245,21 @@ constexpr float kHuntSprint = 6.0f;
 constexpr float kBreakerCharge = 24.0f;
 // The stand of the Spitter: the acid works from its own ground, and the
 // walker keeps this stand off the hunted, in and out of the field,
-// while the pool and the arc do the closing.
-constexpr float kSpitHold = 10.0f;
+// while the slow arc does the closing - a ride the hunted watches come
+// and steps aside from.
+constexpr float kSpitHold = 30.0f;
+// How much afoot a landing reads as a breath shut out: the arc went at
+// its person and never arrived, so a wall stood on the way, and the
+// stand is worth nothing until the walker has moved to a line the
+// acid can ride again.
+constexpr float kSpitOffShut = 3.0f;
+// The bounds of the ride itself, in flight seconds: nothing asked
+// quicker than a hop off the lip, and none so long the arc climbs
+// out of the sky - four seconds of flight top sixty-four blocks of
+// height, the map's own measure, and the pace of the ride is what
+// the tuning slows.
+constexpr float kSpitMinFlight = 0.6f;
+constexpr float kSpitMaxFlight = 4.0f;
 
 // A print stepped past at this width of its side is trodden too. The
 // half-pace disc catches a walker that comes to its print - but a heel at
@@ -577,6 +590,11 @@ struct Player {
     bool off_ledger = false;
     // The Spitter clock: when its next breath of acid may leave it.
     double next_spit = 0.0;
+    // The last breath gone afoot: how much its landing fell from the
+    // aim the arc was owed. Zero says nothing yet - a clean line, the
+    // stand holds - and past kSpitOffShut says the wall on the way,
+    // which hands the stand back to the road until another line rides.
+    float spit_off = 0.0f;
     Vec3 walk_ref{};             // where it last stood, to catch a stuck one
     double walk_ref_at = 0.0;
     double free_slot_at = 0.0;   // dead: when its slot goes back to the wave
@@ -715,14 +733,17 @@ struct SpecialTuning {
 // The breath of the Spitter, as towerdefense.toml says it: how often a
 // spit may leave it, the span it picks its person from and how close is
 // too close for anything but teeth, the lag its aim is read through -
-// where a body stood, not where it stands - the share of a grenade hurt
-// its acid does to people, how long the ground it lands on is held
-// before it melts, and the reach of the pool painted where it lands.
+// where a body stood, not where it stands - the pace the arc rides at
+// (the slower the ride, the higher the climb its landing owes), the
+// share of a grenade hurt its acid does to people, how long the ground
+// it lands on is held before it melts, and the reach of the pool
+// painted where it lands.
 struct SpitterTuning {
     double every = 5.0;    // seconds between its spits
     int range = 30;        // blocks it picks its person from
     int min_range = 3;     // under this the teeth answer, not the pool
     double lag = 0.5;      // seconds back its aim is read at
+    double speed = 10.0;   // blocks a second the arc rides at
     double to_people = 0.15;   // of a grenade hurt on people
     double melt = 2.5;     // seconds after landing the ground melts
     int pool = 1;          // blocks around the landing the pool holds
@@ -2148,6 +2169,8 @@ struct Server::Impl {
                     } else if (kind == kSpitter && field == "_spit_lag") {
                         spitter.lag = std::min(
                             std::max(0.0, number(value)), kPastKeep);
+                    } else if (kind == kSpitter && field == "_spit_speed") {
+                        spitter.speed = std::max(0.5, number(value));
                     } else if (kind == kSpitter &&
                                field == "_acid_to_people") {
                         spitter.to_people = std::max(0.0, number(value));
@@ -2201,10 +2224,12 @@ struct Server::Impl {
             specials[1].bounty, specials[2].bounty, specials[3].bounty,
             specials[4].bounty);
         log("towerdefense.toml: spitter spit every %.1f, span %d-%d, "
-            "lag %.1f, acid %.2f of a hurt, melts in %.1f, pool %d",
+            "lag %.1f, speed %.1f, acid %.2f of a hurt, melts in %.1f, "
+            "pool %d",
             static_cast<double>(spitter.every), spitter.range,
             spitter.min_range, static_cast<double>(spitter.lag),
-            spitter.to_people, spitter.melt, spitter.pool);
+            spitter.speed, spitter.to_people, spitter.melt,
+            spitter.pool);
     }
 
     // One block's worth of the pillar, aired to the clients as the work of
@@ -3431,7 +3456,15 @@ struct Server::Impl {
         } else if (d > 1e-3f) {
             p.body.ori = Vec3{dx / d, dy / d, 0.0f};
         }
-        p.input.mf = p.brute == kLeaper || d > kSpitHold;
+        // The stand, kept inside the band the tuning draws: no nearer
+        // than the band's own edge lets stand, and a breath the walls
+        // shut out hands the walker back to the road, for a stand
+        // without a riding line holds nothing.
+        const float band_stand = std::max(1.0f, std::min(
+            kSpitHold, static_cast<float>(spitter.range)));
+        const bool breath = p.brute != kSpitter ||
+                            p.spit_off <= kSpitOffShut;
+        p.input.mf = p.brute == kLeaper || d > band_stand || !breath;
         p.input.sprint = d > kHuntSprint;
         if (!p.body.airborne) hop_step(p, cx, cy, fz);
         // The hunt probe, at its own beat: what the field holds for
@@ -4170,7 +4203,13 @@ struct Server::Impl {
         }
         if (!t || best < static_cast<float>(spitter.min_range)) return;
         const Vec3 aim = was_at(t->id, spitter.lag);
-        const float flight = std::min(1.6f, std::max(0.6f, best / 20.0f));
+        // The ride: the stand stands off now, so the arc is the show, slow
+        // enough to watch and step aside from. The pace asks its own
+        // seconds - thirty blocks at ten a second ride three of them,
+        // and climb for it - and the bounds keep the ride on the map.
+        const float pace = std::max(1.0f, static_cast<float>(spitter.speed));
+        const float flight = std::min(kSpitMaxFlight,
+                                      std::max(kSpitMinFlight, best / pace));
         const Vec3 src{px, py, p.body.pos.z + 0.4f};
         Vec3 vel;
         vel.x = (aim.x - src.x) / flight;
@@ -4182,6 +4221,13 @@ struct Server::Impl {
         // the way eats it at its face, which is the acid at work on a
         // wall, the fortress line no longer held against it.
         const nade::Impact at = nade::simulate(&phys_map, src, vel, flight);
+        // The reading written on the landing: the distance it fell
+        // from the aim it was owed. Close, the line held, and the
+        // stand stands; past kSpitOffShut names the wall on the way,
+        // and the road is owed again until another line rides.
+        const float ox = at.pos.x - aim.x, oy = at.pos.y - aim.y;
+        const float oz = at.pos.z - aim.z;
+        p.spit_off = std::sqrt(ox * ox + oy * oy + oz * oz);
         Grenade g{p.id, p.team, at.pos,
                   world_time + static_cast<double>(flight)};
         g.acid = true;
@@ -4193,9 +4239,14 @@ struct Server::Impl {
         bw.write_vec(src);
         bw.write_vec(vel);
         broadcast(bw, false);
-        if (map_probe)
+        if (map_probe) {
             log("spitter %d spat, flight %.2f, landing %.1f, %.1f, %.1f",
                 p.id, flight, at.pos.x, at.pos.y, at.pos.z);
+            if (p.spit_off > kSpitOffShut)
+                log("spitter %d breath shut, %.1f afoot of its aim -"
+                    " the walk takes over until a line rides again",
+                    p.id, p.spit_off);
+        }
         p.next_spit = world_time + spitter.every;
     }
     // Where a wave comes from, while it comes: the same ping the tutorial's

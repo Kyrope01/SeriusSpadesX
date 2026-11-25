@@ -75,7 +75,12 @@ turret_refund = 70
 # soaked where they stand, the moving walk out of the landing. The acid
 # hurts people for acid_to_people of a grenade hurt, paints a green pool
 # where it lands acid_pool blocks around, and the ground there melts
-# away acid_melt seconds after.
+# away acid_melt seconds after. The arc rides at spit_speed blocks a
+# second: slower rides climb higher, for a stand-off asks its seconds
+# (thirty blocks at ten a second ride three of them, topping some
+# thirty-six). The spitter keeps its stand at the band's own outer edge,
+# and a breath a wall shuts out walks it back onto the road until a
+# line that rides turns up.
 spitter_first_wave = 3
 spitter_chance = 25
 spitter_extra_every = 10
@@ -84,6 +89,7 @@ spitter_spit_every = 5.0
 spitter_spit_range = 30
 spitter_spit_min = 6
 spitter_spit_lag = 0.5
+spitter_spit_speed = 10.0
 spitter_acid_to_people = 0.15
 spitter_acid_melt = 2.5
 spitter_acid_pool = 1

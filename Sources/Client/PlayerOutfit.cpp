@@ -55,7 +55,7 @@ namespace spades {
 				  {PlayerOutfits::Leaper, "ZombieLeaper"},
 				  {PlayerOutfits::Caller, "ZombiePurple"},
 				  {PlayerOutfits::Breaker, "ZombieYellow"},
-				  {PlayerOutfits::Toppler, "Zombie"},
+				  {PlayerOutfits::Toppler, "ZombieTank"},
 				  {PlayerOutfits::Turret, "Turret"},       {PlayerOutfits::Projector, "Projector"},
 				  {PlayerOutfits::DishAntenna, "DishAntenna"},
 				  {PlayerOutfits::MastAntenna, "MastAntenna"},

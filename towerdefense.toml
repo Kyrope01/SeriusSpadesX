@@ -72,26 +72,31 @@ turret_refund = 70
 
 # The Spitter, the green one. Its spit is a breath of acid in an arc,
 # aimed where its person stood spit_lag seconds back: the still are
-# soaked where they stand, the moving walk out of the landing. The acid
-# hurts people for acid_to_people of a grenade hurt, paints a green pool
-# where it lands acid_pool blocks around, and the ground there melts
-# away acid_melt seconds after. The arc rides at spit_speed blocks a
-# second: slower rides climb higher, for a stand-off asks its seconds
-# (thirty blocks at ten a second ride three of them, topping some
-# thirty-six). The spitter keeps its stand at the band's own outer edge,
-# and a breath a wall shuts out walks it back onto the road until a
-# line that rides turns up.
+# soaked where they stand, the moving walk out of the landing. The
+# bolt bursts at the touch - the ground it lands on, the face of a
+# wall stood on the way - and paints a green pool acid_pool blocks
+# around, a zone of peril the whole acid_melt seconds it holds:
+# the paint burns whoever stands their ground inside it for
+# acid_to_people of a grenade hurt a beat, and the ground falls away
+# a cell at a time once the clock runs out. Its teeth answer nobody:
+# the band is its ground. A person walking in under the range rides
+# a plain walk back out to it, and a breath a wall shuts out walks
+# the spitter only as much road as the line it owes. The arc rides at
+# spit_speed blocks a second - slower rides climb higher, for a
+# stand-off asks its seconds (thirty blocks at ten a second ride
+# three of them, topping some thirty-six) - and a breath leaves the
+# brute every spit_every seconds.
 spitter_first_wave = 3
 spitter_chance = 25
 spitter_extra_every = 10
 spitter_bounty = 5
-spitter_spit_every = 5.0
+spitter_spit_every = 2.5
 spitter_spit_range = 30
 spitter_spit_min = 6
 spitter_spit_lag = 0.5
 spitter_spit_speed = 10.0
 spitter_acid_to_people = 0.15
-spitter_acid_melt = 2.5
+spitter_acid_melt = 5.0
 spitter_acid_pool = 1
 
 # The Tank, the blue one. Its own model is to come: it wears the plain

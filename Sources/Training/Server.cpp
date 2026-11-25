@@ -223,6 +223,13 @@ constexpr uint8_t kTurretBlockId = 255;
 // wear.
 constexpr uint32_t kAcidColour = 0x7F000000u | 0x5AFF3Cu;   // acid green
 constexpr uint8_t kAcidBlockId = 254;
+// The pool is a peril while it holds: the paint burns at whoever stands
+// their ground inside it, a share of a grenade hurt a beat, until the
+// melt takes the blocks out from under them - and the cells come down
+// one a crumble apart once the melt clock runs out, the ground saying
+// so a cell at a time rather than one lone collapse of the paint.
+constexpr float kAcidBeat = 0.5f;
+constexpr float kAcidCrumble = 0.12f;
 
 // The catch of the pack: a follower runs once its leader stands more than
 // this far ahead. Every heel of the line walks at the same pace as the one
@@ -254,12 +261,12 @@ constexpr float kSpitHold = 30.0f;
 // acid can ride again.
 constexpr float kSpitOffShut = 3.0f;
 // The bounds of the ride itself, in flight seconds: nothing asked
-// quicker than a hop off the lip, and none so long the arc climbs
-// out of the sky - four seconds of flight top sixty-four blocks of
-// height, the map's own measure, and the pace of the ride is what
-// the tuning slows.
+// quicker than a hop off the lip, and none longer than the ceiling
+// of fuse a client flies - a bolt crosses three seconds of sky and
+// no more, so a ride asked longer never comes, and the pace of the
+// ride is what the tuning slows.
 constexpr float kSpitMinFlight = 0.6f;
-constexpr float kSpitMaxFlight = 4.0f;
+constexpr float kSpitMaxFlight = nade::kMaxFuse;
 
 // A print stepped past at this width of its side is trodden too. The
 // half-pace disc catches a walker that comes to its print - but a heel at
@@ -731,21 +738,21 @@ struct SpecialTuning {
 };
 
 // The breath of the Spitter, as towerdefense.toml says it: how often a
-// spit may leave it, the span it picks its person from and how close is
-// too close for anything but teeth, the lag its aim is read through -
+// spit may leave it, the span it picks its person from and the floor
+// inside it no arc owes its rider, the lag its aim is read through -
 // where a body stood, not where it stands - the pace the arc rides at
 // (the slower the ride, the higher the climb its landing owes), the
 // share of a grenade hurt its acid does to people, how long the ground
 // it lands on is held before it melts, and the reach of the pool
 // painted where it lands.
 struct SpitterTuning {
-    double every = 5.0;    // seconds between its spits
+    double every = 2.5;    // seconds between its spits
     int range = 30;        // blocks it picks its person from
     int min_range = 3;     // under this the teeth answer, not the pool
     double lag = 0.5;      // seconds back its aim is read at
     double speed = 10.0;   // blocks a second the arc rides at
     double to_people = 0.15;   // of a grenade hurt on people
-    double melt = 2.5;     // seconds after landing the ground melts
+    double melt = 5.0;     // seconds the paint holds before the melt
     int pool = 1;          // blocks around the landing the pool holds
 };
 
@@ -794,6 +801,9 @@ struct Server::Impl {
         double at;
     };
     std::vector<AcidMelt> melts;
+    // The clock of the pool's burn: the beat the acid next works on
+    // whoever stands their ground inside the paint.
+    double acid_beat_at = 0.0;
     // Where the people were, a ring per slot: a sample every kPastBeat,
     // held kPastKeep seconds. The lag of a spit reads a place a body
     // stood this long back, and only the still are caught where they
@@ -3464,8 +3474,20 @@ struct Server::Impl {
             kSpitHold, static_cast<float>(spitter.range)));
         const bool breath = p.brute != kSpitter ||
                             p.spit_off <= kSpitOffShut;
-        p.input.mf = p.brute == kLeaper || d > band_stand || !breath;
-        p.input.sprint = d > kHuntSprint;
+        if (p.brute == kSpitter && breath && d > 1e-3f &&
+            d < band_stand) {
+            // The person walked the band in, the line holds, and the
+            // stand keeps the distance it was made to keep: a plain
+            // walk back out to the edge the band draws. The arc and
+            // the pool are the only teeth this brute carries, and
+            // the shuffle back is the run the hunted gets to make.
+            p.body.ori = Vec3{-dx / d, -dy / d, 0.0f};
+            p.input.mf = true;
+            p.input.sprint = false;
+        } else {
+            p.input.mf = p.brute == kLeaper || d > band_stand || !breath;
+            p.input.sprint = d > kHuntSprint;
+        }
         if (!p.body.airborne) hop_step(p, cx, cy, fz);
         // The hunt probe, at its own beat: what the field holds for
         // the column underfoot and the step it lends. A hunter lost
@@ -3627,8 +3649,15 @@ struct Server::Impl {
             }
             return;
         }
+        // A Spitter rides no pack: the pack pours along its road with
+        // its teeth ahead of it, and a ranged brute carried at a heel
+        // walks clean past the band it was made to keep. Its own hunt
+        // is its road - the stand, the arc, the walk for a riding
+        // line - so it hands the pack on and walks the hunt alone.
+        Player* pack_ahead = p.ahead_id >= 0
+            ? players[static_cast<size_t>(p.ahead_id)].get() : nullptr;
         const Player* ahead =
-            p.ahead_id >= 0 ? players[static_cast<size_t>(p.ahead_id)].get() : nullptr;
+            p.brute == kSpitter ? nullptr : pack_ahead;
         if (ahead && ahead->id != p.id && ahead->zombie && ahead->alive) {
             // The heel held in the footsteps of the one ahead: a follower
             // is led by the prints its leader left - the threshold it
@@ -4109,6 +4138,12 @@ struct Server::Impl {
         }
         for (auto& qq : players) {
             if (bit) break;
+            // The Spitter keeps its band: its answer to a person is
+            // the arc and never the teeth, at whatever distance the
+            // hunt hands it. The core and the guns stay walls by
+            // the walker's rule, and the pool of its acid is the
+            // bite it lands.
+            if (p.brute == kSpitter) break;
             if (!qq || qq->zombie || !qq->alive || qq->spectator() || qq->team != kPeople) continue;
             if (!near3(p.body.pos, qq->body.pos, kMeleeDistance)) continue;
             hit(*qq, 34, &p, kMeleeKill);
@@ -4211,37 +4246,71 @@ struct Server::Impl {
         const float flight = std::min(kSpitMaxFlight,
                                       std::max(kSpitMinFlight, best / pace));
         const Vec3 src{px, py, p.body.pos.z + 0.4f};
+        // A grenade rides the wire in the nade's own unit of pace, a
+        // thirty-second of a block a second, and the sim the server
+        // flies it through takes the same: the arc that owes R blocks
+        // in T seconds says R over T of them, and the climb the pull
+        // asks reads in the unit the gravity takes, its own half of
+        // T. Thirty blocks over three seconds ride at ten blocks a
+        // second and top about thirty-six, the ride the tuning owns.
         Vec3 vel;
-        vel.x = (aim.x - src.x) / flight;
-        vel.y = (aim.y - src.y) / flight;
-        vel.z = (aim.z - src.z) / flight -
-                0.5f * nade::kGravity * flight;
-        // The server simulates the flight every client will, and lands
-        // the acid where the arc truly ends: a wall the breath meets on
-        // the way eats it at its face, which is the acid at work on a
-        // wall, the fortress line no longer held against it.
-        const nade::Impact at = nade::simulate(&phys_map, src, vel, flight);
+        vel.x = (aim.x - src.x) / (flight * nade::kBlocksPerUnit);
+        vel.y = (aim.y - src.y) / (flight * nade::kBlocksPerUnit);
+        vel.z = (aim.z - src.z) / (flight * nade::kBlocksPerUnit) -
+                0.5f * flight;
+        // The landing is the touch, not a fuse: the bolt rides its
+        // arc and bursts the tick it first meets the world, at the
+        // step of the sim itself - the same step every client
+        // walks. The face it meets holds the burst: the ground the
+        // person stands beside, the wall stood on the way. What
+        // never meets the world rides out its seconds and comes
+        // apart in the sky, and the paint lands only where the
+        // ground stood, so a bolt apart in the air paints nothing.
+        Vec3 at_pos = src;
+        Vec3 at_vel = vel;
+        float rode = flight;
+        for (int tick = 1; tick <= 240; ++tick) {
+            const float left =
+                flight - static_cast<float>(tick - 1) * nade::kTickDt;
+            if (left <= 0.0f) break;
+            const Vec3 from = at_pos;
+            at_vel.z += nade::kTickDt;
+            at_pos.x +=
+                at_vel.x * nade::kTickDt * nade::kBlocksPerUnit;
+            at_pos.y +=
+                at_vel.y * nade::kTickDt * nade::kBlocksPerUnit;
+            at_pos.z +=
+                at_vel.z * nade::kTickDt * nade::kBlocksPerUnit;
+            const int lx = static_cast<int>(std::floor(at_pos.x));
+            const int ly = static_cast<int>(std::floor(at_pos.y));
+            const int lz = static_cast<int>(std::floor(at_pos.z));
+            if (phys_map.solid(lx, ly, lz)) {
+                at_pos = from;
+                rode = static_cast<float>(tick) * nade::kTickDt;
+                break;
+            }
+        }
         // The reading written on the landing: the distance it fell
         // from the aim it was owed. Close, the line held, and the
         // stand stands; past kSpitOffShut names the wall on the way,
         // and the road is owed again until another line rides.
-        const float ox = at.pos.x - aim.x, oy = at.pos.y - aim.y;
-        const float oz = at.pos.z - aim.z;
+        const float ox = at_pos.x - aim.x, oy = at_pos.y - aim.y;
+        const float oz = at_pos.z - aim.z;
         p.spit_off = std::sqrt(ox * ox + oy * oy + oz * oz);
-        Grenade g{p.id, p.team, at.pos,
-                  world_time + static_cast<double>(flight)};
+        Grenade g{p.id, p.team, at_pos,
+                  world_time + static_cast<double>(rode)};
         g.acid = true;
         grenades.push_back(g);
         ByteWriter bw;
         bw.write_u8(static_cast<uint8_t>(PacketId::GrenadePacket));
         bw.write_u8(static_cast<uint8_t>(p.id));
-        bw.write_f32(flight);
+        bw.write_f32(rode);
         bw.write_vec(src);
         bw.write_vec(vel);
         broadcast(bw, false);
         if (map_probe) {
-            log("spitter %d spat, flight %.2f, landing %.1f, %.1f, %.1f",
-                p.id, flight, at.pos.x, at.pos.y, at.pos.z);
+            log("spitter %d spat, rode %.2f, landing %.1f, %.1f, %.1f",
+                p.id, rode, at_pos.x, at_pos.y, at_pos.z);
             if (p.spit_off > kSpitOffShut)
                 log("spitter %d breath shut, %.1f afoot of its aim -"
                     " the walk takes over until a line rides again",
@@ -5007,6 +5076,7 @@ struct Server::Impl {
             }
         }
         acid_melt_tick();
+        acid_pool_tick();
     }
 
     void explode(const Grenade& g) {
@@ -5085,11 +5155,19 @@ struct Server::Impl {
                 }
         if (pool.empty()) return;
         acid_colour_said();
+        int laid_cells = 0;
         for (const Cell& c : pool) {
             map.set(c.x, c.y, c.z, kAcidColour);
             acid_block_painted(c.x, c.y, c.z);
+            // A cell a crumble apart once the clock runs out: the
+            // pool falls away one at a time and the ground says so,
+            // a crumble a cell, the paint holding its peril whole.
             melts.push_back(
-                AcidMelt{c.x, c.y, c.z, world_time + spitter.melt});
+                AcidMelt{c.x, c.y, c.z,
+                         world_time + spitter.melt +
+                             static_cast<double>(laid_cells) *
+                             static_cast<double>(kAcidCrumble)});
+            ++laid_cells;
         }
     }
     // The melts come due, a cell a pass of the tick: the block leaves
@@ -5118,6 +5196,39 @@ struct Server::Impl {
             std::vector<Cell> removed;
             map.destroy_point(m.x, m.y, m.z, &removed);
             touched(removed, false);
+        }
+    }
+
+    // The pool, a peril the whole paint holds: the acid works on
+    // whoever stands their ground inside it, a share of a grenade
+    // hurt a beat, until the melt takes the blocks out from under
+    // them. A body reads touched at the cells its feet and its
+    // stand hold, and a melt gone past its clock bites nobody -
+    // that block is already on its way down.
+    void acid_pool_tick() {
+        if (world_time < acid_beat_at) return;
+        acid_beat_at = world_time + static_cast<double>(kAcidBeat);
+        const int hurt = static_cast<int>(
+            100.0f * static_cast<float>(spitter.to_people));
+        if (hurt <= 0) return;
+        for (auto& qq : players) {
+            if (!qq || qq->zombie || !qq->alive || qq->spectator() ||
+                qq->team != kPeople) continue;
+            const int fx = static_cast<int>(std::floor(qq->body.pos.x));
+            const int fy = static_cast<int>(std::floor(qq->body.pos.y));
+            const int fz = static_cast<int>(std::floor(
+                qq->body.pos.z + 2.25f));
+            bool in_pool = false;
+            for (const AcidMelt& m : melts) {
+                if (world_time >= m.at) continue;
+                if (m.x != fx || m.y != fy) continue;
+                if (m.z != fz && m.z != fz + 1) continue;
+                in_pool = true;
+                break;
+            }
+            if (in_pool)
+                set_hp(*qq, qq->hp - hurt, nullptr, kGrenadeKill,
+                       &qq->body.pos);
         }
     }
 

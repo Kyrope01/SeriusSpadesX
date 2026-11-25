@@ -1973,6 +1973,13 @@ namespace spades {
 								// The spit lands quiet, save the impact sound its
 								// own pak laid at Sounds/Weapons/Grenade: the
 								// splash belongs to the set as much as the skin.
+								// The voice is a plain local ride: a spatial one
+								// off a blockface reads muffled at an ear this
+								// engine keeps behind its screens, so the fall
+								// with distance is held by hand, over the blocks
+								// between the ear and the pool - loudly under
+								// the eye, a whisper across the field, and never
+								// eaten by the walls.
 								if (!IsMuted() && FileManager::FileExists(
 								      "Sounds/Weapons/Grenade/"
 								      "AcidSpitImpact.opus")) {
@@ -1980,11 +1987,14 @@ namespace spades {
 									  audioDevice->RegisterSound(
 									    "Sounds/Weapons/Grenade/"
 									    "AcidSpitImpact.opus");
+									const float blocks =
+									  (lastSceneDef.viewOrigin - g.GetPosition())
+									    .GetLength();
 									AudioParam param;
-									param.volume = 8.0F;
-									param.referenceDistance = 4.0F;
-									audioDevice->Play(c.GetPointerOrNull(),
-									                  g.GetPosition(), param);
+									param.volume =
+									  6.0F / (1.0F + blocks / 10.0F);
+									audioDevice->PlayLocal(c.GetPointerOrNull(),
+									                       param);
 								}
 								if (cg_spitDebug)
 									SPLog("nade of %d landed quiet, a spit",

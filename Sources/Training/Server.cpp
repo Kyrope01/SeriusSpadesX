@@ -622,6 +622,10 @@ struct Player {
     // When it last spoke its probe line: the debug a map asks for
     // keeps its peace until this clock comes round again.
     double probe_at = -1e9;
+    // When its hunt last spoke its probe line: the chasers carry
+    // their own clock, for their beat shares no slot with the
+    // breath probe of the spit.
+    double hunt_probe_at = -1e9;
     // When its line last rode the last resort down the road: the mercy
     // re-arms slower than anything else the stuck are owed, that the
     // road, more than the carrying, stays the way home.
@@ -3416,7 +3420,8 @@ struct Server::Impl {
         const float dy = t->body.pos.y - p.body.pos.y;
         const float d = std::sqrt(dx * dx + dy * dy);
         int hx = cx, hy = cy;
-        if (horde->hunt_step(cx, cy, hx, hy)) {
+        const bool stepped = horde->hunt_step(cx, cy, hx, hy);
+        if (stepped) {
             const float ax = static_cast<float>(hx) + 0.5f -
                              p.body.pos.x;
             const float ay = static_cast<float>(hy) + 0.5f -
@@ -3429,6 +3434,24 @@ struct Server::Impl {
         p.input.mf = p.brute == kLeaper || d > kSpitHold;
         p.input.sprint = d > kHuntSprint;
         if (!p.body.airborne) hop_step(p, cx, cy, fz);
+        // The hunt probe, at its own beat: what the field holds for
+        // the column underfoot and the step it lends. A hunter lost
+        // on a slope reads a field of no word about it, and the line
+        // says so aloud - the reading a stuck chase
+        // begins with. -1 is that silence; the step is the cell the
+        // walk names, or none, and the body presses straight.
+        if (map_probe && world_time - p.hunt_probe_at >= kProbeAgain) {
+            p.hunt_probe_at = world_time;
+            const int field = horde->hunt_reach(cx, cy);
+            if (stepped)
+                log("hunt %d: at %d,%d,%d the person is %.1f away, the "
+                    "field reads %d, the step is %d,%d",
+                    p.id, cx, cy, fz, d, field, hx, hy);
+            else
+                log("hunt %d: at %d,%d,%d the person is %.1f away, the "
+                    "field reads %d, no step",
+                    p.id, cx, cy, fz, d, field);
+        }
     }
 
     // The Breaker: the core is the road entire, and the line between is

@@ -708,6 +708,17 @@ void Horde::hunt_follow(int px, int py, double now) {
     flood(hunt_dist_, -1, -1, false, px, py);
 }
 
+// The best the hunt field says about the column underfoot, asked by
+// the host probe of a chase: the walk holds no word about columns it
+// never reached, and the silence reads aloud there.
+int Horde::hunt_reach(int x, int y) const {
+    if (x < 0 || x >= kMapW || y < 0 || y >= kMapH) return kUnreachable;
+    const int bk = best_hunt_state(x, y);
+    return bk < 0
+               ? kUnreachable
+               : hunt_dist_[cell_index(x, y) * kSurfMax + bk];
+}
+
 // The standing surface of the column the walk has reached that meets the
 // feet at z: of the floors that could carry the body, the one this side
 // of its soles. Only the floors the field reaches are asked - a column

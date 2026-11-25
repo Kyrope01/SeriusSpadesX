@@ -402,6 +402,11 @@ public:
     // keeps their cell, a flood the moment they take another. An
     // invalid person stands the field down entirely.
     void hunt_follow(int px, int py, double now);
+    // The probe readout for the host: the distance the hunt field
+    // holds for the column a hunter stands in, kUnreachable when
+    // the walk has no word about it - the number the map debug
+    // asks of a lost chase.
+    int hunt_reach(int x, int y) const;
 
     // The anchor the last wave walked in from at `corner`: on a map that
     // named its sites, the named ground itself - the first cell the walk

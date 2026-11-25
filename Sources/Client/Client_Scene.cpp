@@ -26,6 +26,7 @@
 #include "Client.h"
 
 #include <Core/ConcurrentDispatch.h>
+#include <Core/Debug.h>
 #include <Core/FileManager.h>
 #include <Core/Settings.h>
 #include <Core/Strings.h>
@@ -62,6 +63,8 @@ DEFINE_SPADES_SETTING(cg_depthOfFieldAmount, "1");
 DEFINE_SPADES_SETTING(cg_shake, "1");
 DEFINE_SPADES_SETTING(cg_debugBlockCursor, "0");
 DEFINE_SPADES_SETTING(cg_debugPlayerHitboxes, "0");
+// One line and a wire box per flying grenade: the spitball hunt.
+DEFINE_SPADES_SETTING(cg_spitDebug, "0");
 
 SPADES_SETTING(cg_ragdoll);
 SPADES_SETTING(cg_hurtScreenEffects);
@@ -588,6 +591,7 @@ namespace spades {
 				return; // work-around for water refraction problem
 
 			Handle<IModel> model = renderer->RegisterModel("Models/Weapons/Grenade/Grenade.kv6");
+			const char *skinSaid = "the usual skin";
 			// A thrower drawn in a model set of its own flies its set
 			// grenade too. The file the set lays out for the held one
 			// stands here as well (Tool/Grenade.kv6, or the own
@@ -612,8 +616,10 @@ namespace spades {
 								break;
 							}
 						}
-						if (own)
-							model = own;
+							if (own) {
+								model = own;
+								skinSaid = "the set skin";
+							}
 					}
 				}
 			}
@@ -627,6 +633,26 @@ namespace spades {
 			param.matrix = param.matrix * g.GetOrientation().ToRotationMatrix();
 			param.matrix = param.matrix * Matrix4::Scale(0.03F);
 			renderer->RenderModel(*model, param);
+
+			// While cg_spitDebug rides, a wire box the size of a block rides
+			// the grenade each frame, and the first frame of a flight says
+			// its thrower, its place and its skin aloud: a box seen on the
+			// screen with nothing drawn inside it questions the skin alone,
+			// and a box never seen questions the flight the wire carries.
+			if (cg_spitDebug) {
+				static const Grenade *lastFlight = nullptr;
+				const Vector3 probePos = g.GetPosition();
+				if (lastFlight != &g) {
+					lastFlight = &g;
+					SPLog("nade of %d drawn at %.2f, %.2f, %.2f, %s",
+					      throwerId, probePos.x, probePos.y, probePos.z,
+					      skinSaid);
+				}
+				AddDebugObjectToScene(
+				  AABB3(probePos.x - 0.5F, probePos.y - 0.5F,
+				        probePos.z - 0.5F, 1, 1, 1),
+				  MakeVector4(1, 0, 1, 1));
+			}
 		}
 
 		void Client::AddDebugObjectToScene(const spades::OBB3& obb, const Vector4& color) {

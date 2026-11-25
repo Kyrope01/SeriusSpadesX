@@ -55,6 +55,7 @@
 #include <Gui/TrainingHost.h>
 
 SPADES_SETTING(cg_headshotGore);
+SPADES_SETTING(cg_spitDebug);
 
 DEFINE_SPADES_SETTING(cg_ragdoll, "1");
 SPADES_SETTING(cg_blood);
@@ -1968,8 +1969,28 @@ namespace spades {
 						static const char *const kPaths[2] = {
 						  "Tool/Grenade.kv6", "Grenade/Grenade.kv6"};
 						for (const char *part : kPaths) {
-							if (FileManager::FileExists((set + part).c_str()))
+							if (FileManager::FileExists((set + part).c_str())) {
+								// The spit lands quiet, save the impact sound its
+								// own pak laid at Sounds/Weapons/Grenade: the
+								// splash belongs to the set as much as the skin.
+								if (!IsMuted() && FileManager::FileExists(
+								      "Sounds/Weapons/Grenade/"
+								      "AcidSpitImpact.opus")) {
+									Handle<IAudioChunk> c =
+									  audioDevice->RegisterSound(
+									    "Sounds/Weapons/Grenade/"
+									    "AcidSpitImpact.opus");
+									AudioParam param;
+									param.volume = 8.0F;
+									param.referenceDistance = 4.0F;
+									audioDevice->Play(c.GetPointerOrNull(),
+									                  g.GetPosition(), param);
+								}
+								if (cg_spitDebug)
+									SPLog("nade of %d landed quiet, a spit",
+									      throwerId);
 								return; // the spit lands quietly
+							}
 						}
 					}
 				}

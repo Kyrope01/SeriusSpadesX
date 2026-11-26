@@ -6,6 +6,7 @@
 #include "Physics.h"
 #include "Protocol.h"
 #include "SolidMap.h"
+#include "StoreCatalog.h"
 #include "TrainingCourse.h"
 #include "TrainingModes.h"
 #include "Vec3.h"
@@ -36,6 +37,9 @@
 #include <vector>
 
 namespace host {
+
+// The store's own table, in the names its callers already use.
+namespace store = training::store;
 
 namespace {
 
@@ -524,10 +528,19 @@ struct Player {
     int tool = kToolWeapon;
     uint32_t color = 0x707070;   // 0xRRGGBB
     int kills = 0;
-    // The coin of the horde, the Zedcred: what a kill of the walking dead
+    // The coin of the horde, the Cube: what a kill of the walking dead
     // pays, what a sentry or its raising costs, kept plain on the player.
-    int zc = 0;                  // credits in hand
+    int zc = 0;                  // Cubes in hand
     bool zc_staked = false;      // the purse opened once, at the first rise
+    // The store's own account: which gun a player has bought open, the
+    // damage bands they have paid for, and the perks and plating that
+    // stand. Levels are times bought, indexed by StoreCatalog::kItems.
+    // They survive death, and are never given back.
+    uint8_t store_level[store::kItemCount] = {};
+    int gun_damage_bonus[3] = {};  // paid damage bands, by gun
+    bool weapon_open[3] = {true, false, false};  // the rifle is always yours
+    int max_hp_bonus = 0;          // Tough skin's standing
+    int speed_bonus_pct = 0;       // Light feet's standing
     // One of the walking dead worth more than a grunt wears its own outfit
     // and pays its own bounty; a grunt wears 64 and pays the rate.
     uint8_t outfit = 64;         // the outfit the client dresses it with
@@ -701,16 +714,16 @@ struct TurretTuning {
     double interval[kTurretLevels] = {0.17, 0.17, 0.066};
 };
 
-// The coin of the horde, the Zedcred: a kill pays it, a wave cleared adds
+// The coin of the horde, the Cube: a kill pays it, a wave cleared adds
 // a bonus on top, and a sentry is bought and raised with it. A new gun
 // climbs a flat step by each pillar standing already - the park stays
 // buyable as long as the game runs - and a raising is a fixed price the
 // park never touches. towerdefense.toml says all of it again, by the same word
 // as the tables above.
 struct EconomyTuning {
-    int per_kill = 1;        // the bounty of a grunt; specials ask more
-    int start = 15;          // the purse a first rise opens
-    int wave_bonus = 10;     // plus the number of the wave, on a clear
+    int per_kill = 3;        // the bounty of a grunt; specials ask more
+    int start = 25;          // the purse a first rise opens
+    int wave_bonus = 20;     // plus twice the number of the wave, on a clear
     int price_base = 5;      // a first gun, before the step
     int price_step = 2;      // by each pillar the builder already stands
     int upgrade[kTurretLevels - 1] = {10, 30};
@@ -729,7 +742,7 @@ enum SpecialKind { kSpitter = 0, kTank, kHealer, kLeaper, kBreaker,
 struct SpecialTuning {
     const char* name = "";
     int outfit = 64;         // the number the client dresses it with
-    int bounty = 0;          // the Zedcred its kill pays over the grunt rate
+    int bounty = 0;          // the Cubes its kill pays over the grunt rate
     int first_wave = 0;      // the first wave it may stand in
     int chance = 0;          // percent by the wave, when it has a chance
     int extra_every = 0;     // every so many waves a second one may roll
@@ -782,6 +795,13 @@ struct Grenade {
     Vec3 pos;
     double explode_at;
     bool acid = false;   // the breath of a Spitter: a pool, not a crater
+};
+
+// One price the store's host changed from the default, by the item's
+// index in StoreCatalog::kItems.
+struct StorePrice {
+    int index = -1;
+    int price = 0;
 };
 
 struct Server::Impl {
@@ -1372,6 +1392,12 @@ struct Server::Impl {
         {"Breaker", 68, 7, 8, 60, 8, 0, 0},
     };
     int healer_tank_together = 30;  // both bullies stand from this wave on
+    // The store's prices the host changed by word, and what the wire last
+    // said each player's purse was, so a change is the only thing sent.
+    std::vector<StorePrice> store_prices;
+    std::vector<proto::StoreState> store_sent;
+    bool store_sent_any = false;
+    double store_resend_next = 0.0;
     // The specials the wave rides: one rides each due tread, at the place
     // the tread names, until the queue is spent - the dead of a wave walk
     // in single file, and a brute walks beside the grunts, not instead.
@@ -1578,6 +1604,11 @@ struct Server::Impl {
             enet_peer_send(p.peer, 0, pkt);
         }
         p.saved.clear();
+        // The store's own word, now that the client is in the world and can
+        // hear it: a store that only arrived on the next five-second
+        // refresh would leave the store's button hidden for five seconds
+        // after the map was drawn.
+        store_state_send();
     }
 
     void on_disconnect(Player& p) {
@@ -1649,7 +1680,7 @@ struct Server::Impl {
         if (tower_defense_mode() && p.playing() && !p.zombie && !p.zc_staked) {
             p.zc_staked = true;
             p.zc = economy.start;
-            system_chat(std::to_string(p.zc) + " credits in hand.", p.id);
+            system_chat(std::to_string(p.zc) + " Cubes in hand.", p.id);
         }
         ByteWriter bw;
         bw.write_u8(static_cast<uint8_t>(PacketId::CreatePlayer));
@@ -2122,9 +2153,9 @@ struct Server::Impl {
                 // The whole of the value as one int; each field then takes
                 // its own fence, the floors and caps of the table above.
                 const int n = static_cast<int>(number(value));
-                if (key == "zedcred_per_kill") {
+                if (key == "zedcred_per_kill" || key == "cubes_per_kill") {
                     economy.per_kill = std::max(0, n);
-                } else if (key == "zedcred_start") {
+                } else if (key == "zedcred_start" || key == "cubes_start") {
                     economy.start = std::max(0, n);
                 } else if (key == "wave_bonus_base") {
                     economy.wave_bonus = std::max(0, n);
@@ -2138,6 +2169,25 @@ struct Server::Impl {
                 } else if (key == "turret_refund") {
                     economy.refund = std::min(100, std::max(0, n));
                 }
+                continue;
+            }
+            if (section == "store") {
+                // The store's prices, one card at a time: price_<sku> asks
+                // this many Cubes for the card the catalogue names. A word
+                // the catalogue does not know is skipped, as everywhere
+                // here. Free means free, so a 0 is honoured.
+                store_prices.clear();
+                for (size_t i = 0; i < store::kItemCount; ++i)
+                    if (key == std::string("price_") + store::kItems[i].sku) {
+                        const int n = static_cast<int>(number(value));
+                        if (n >= 0) {
+                            StorePrice pr;
+                            pr.index = static_cast<int>(i);
+                            pr.price = n;
+                            store_prices.push_back(pr);
+                        }
+                        break;
+                    }
                 continue;
             }
             if (section == "specials") {
@@ -2226,6 +2276,8 @@ struct Server::Impl {
             economy.per_kill, economy.start, economy.wave_bonus,
             economy.price_base, economy.price_step,
             economy.upgrade[0], economy.upgrade[1], economy.refund);
+        log("towerdefense.toml: store prices said for %d of %d cards",
+            static_cast<int>(store_prices.size()), static_cast<int>(store::kItemCount));
         log("towerdefense.toml: specials first waves %d/%d/%d/%d/%d, "
             "bounties %d/%d/%d/%d/%d",
             specials[0].first_wave, specials[1].first_wave,
@@ -2425,6 +2477,56 @@ struct Server::Impl {
             if (o && o->peer && !o->loading && o->ext_turrets && o->playing()) send(*o, bw);
     }
 
+    // The store's own word, the smoke's sixth: one player's purse, the wave
+    // and core the world stands at, and what they have bought. Sent to
+    // EACH player on their own - a purse differs between two hands - and
+    // only on change, with the same five seconds the guns keep, so a
+    // client that finishes loading mid game is owed it too.
+    void store_state_send() {
+        if (!tower_defense_mode()) return;
+        std::vector<proto::StoreState> states(players.size());
+        for (size_t i = 0; i < players.size(); ++i) {
+            // The slots are taken as they are filled, and this runs for every
+            // one: an empty one has no purse to say.
+            if (!players[i]) continue;
+            Player& o = *players[i];
+            proto::StoreState& s = states[i];
+            s.cubes = static_cast<uint16_t>((std::max)(0, o.zc));
+            s.wave = static_cast<uint8_t>(horde ? horde->wave() : 0);
+            s.phase = static_cast<uint8_t>(horde ? static_cast<int>(horde->phase()) : 0);
+            s.core_hp = static_cast<uint16_t>(horde ? (std::max)(0, horde->core_hp()) : 0);
+            s.core_max_hp = static_cast<uint16_t>(horde ? horde->config().core_hp : 0);
+            s.weapon = static_cast<uint8_t>(o.weapon);
+            s.grenades = static_cast<uint8_t>(o.grenades);
+            s.blocks = static_cast<uint8_t>(o.blocks);
+            size_t n = 0;
+            for (size_t k = 0; k < store::kItemCount && n < 64; ++k)
+                if (o.store_level[k]) {
+                    s.owned[n].index = static_cast<uint8_t>(k);
+                    s.owned[n].level = o.store_level[k];
+                    ++n;
+                }
+            s.owned_count = static_cast<uint8_t>(n);
+        }
+        const bool again = world_time >= store_resend_next;
+        if (again) store_resend_next = world_time + kTrailResend;
+        for (size_t i = 0; i < players.size(); ++i) {
+            if (!players[i]) continue;
+            Player& o = *players[i];
+            if (!o.peer || o.loading || !o.ext_turrets || !o.playing()) continue;
+            const proto::StoreState& s = states[i];
+            if (!again && store_sent_any && s == store_sent[i]) continue;
+            ByteWriter bw;
+            proto::write_store(bw, s);
+            if (o.loading)
+                o.saved.push_back(bw.data);
+            else
+                send(o, bw);
+        }
+        store_sent = std::move(states);
+        store_sent_any = true;
+    }
+
     // A pillar taken down: whatever blocks of it still stand go with it,
     // so no coloured stub of a dead gun is left floating, and the wire
     // says the gun is gone by no longer saying it.
@@ -2556,6 +2658,7 @@ struct Server::Impl {
         }
         turret_state_send();
         core_state_send();
+        store_state_send();
     }
 
     // The builder's word to the server made good: a pillar on the block
@@ -2564,6 +2667,29 @@ struct Server::Impl {
     // finds a pillar standing raises it instead, when the word named a
     // higher level; a lower word does not undo a pillar: the way back is
     // the spade, as with any build.
+    // What a pillar at `level` asks of this builder: the base and the step by
+    // each gun they already stand for a fresh one, or the fixed raisings
+    // for one already standing. The store and /turret both ask here, so a
+    // gun is one price however the word for it arrives. `standing` is the
+    // index of a pillar already on the aimed cell, or -1 for none.
+    int turret_price_for(const Player& p, int level, int standing) const {
+        level = level < 1 ? 1 : (level > kTurretLevels ? kTurretLevels : level);
+        int price = 0;
+        if (standing >= 0) {
+            const Turret& t = turrets[static_cast<size_t>(standing)];
+            for (int l = t.level; l < level; ++l)
+                price += economy.upgrade[static_cast<size_t>(l - 1)];
+            return price;
+        }
+        int owned = 0;
+        for (const Turret& t : turrets)
+            if (t.owner == p.id) ++owned;
+        price = economy.price_base + economy.price_step * owned;
+        for (int l = 1; l < level; ++l)
+            price += economy.upgrade[static_cast<size_t>(l - 1)];
+        return price;
+    }
+
     void turret_place(Player& p, int level, std::string& reply) {
         if (!tower_defense_mode()) {
             reply = "Sentry guns are a thing of the tower defense.";
@@ -2591,11 +2717,9 @@ struct Server::Impl {
             }
             // A raising is a fixed price each level passed, whatever the
             // park around it - the word that takes it down refunds part.
-            int price = 0;
-            for (int l = t.level; l < level; ++l)
-                price += economy.upgrade[l - 1];
+            const int price = turret_price_for(p, level, standing);
             if (p.zc < price) {
-                reply = "Not enough credits: " + std::to_string(price) +
+                reply = "Not enough Cubes: " + std::to_string(price) +
                         " asked, " + std::to_string(p.zc) + " in hand.";
                 return;
             }
@@ -2608,7 +2732,7 @@ struct Server::Impl {
                                      ? "The pillar is raised to level "
                                      : "Not yours, but raised all the same: ";
             reply = raised + std::to_string(level) + " for " +
-                    std::to_string(price) + " credits; " +
+                    std::to_string(price) + " Cubes; " +
                     std::to_string(p.zc) + " in hand.";
             return;
         }
@@ -2629,15 +2753,9 @@ struct Server::Impl {
         // and a level above the base adds its raisings on top. The toll
         // is asked before the blocks stand: a purse too thin leaves the
         // ground as it was, and no half bought pillar stays behind.
-        int owned = 0;
-        for (const Turret& t : turrets)
-            if (t.owner == p.id)
-                ++owned;
-        int price = economy.price_base + economy.price_step * owned;
-        for (int l = 1; l < level; ++l)
-            price += economy.upgrade[l - 1];
+        const int price = turret_price_for(p, level, -1);
         if (p.zc < price) {
-            reply = "Not enough credits: " + std::to_string(price) +
+            reply = "Not enough Cubes: " + std::to_string(price) +
                     " asked, " + std::to_string(p.zc) + " in hand.";
             return;
         }
@@ -2683,7 +2801,7 @@ struct Server::Impl {
         turret_resend_next = 0.0;
         p.zc -= price;
         reply = "Sentry level " + std::to_string(level) + " placed for " +
-                std::to_string(price) + " credits; " + std::to_string(p.zc) +
+                std::to_string(price) + " Cubes; " + std::to_string(p.zc) +
                 " in hand.";
     }
 
@@ -2708,6 +2826,173 @@ struct Server::Impl {
         return down;
     }
 
+    // The store's own word: /buy <sku> buys one card, /store lists what it
+    // carries. The server is the only place a Cube is counted, so a
+    // client's window is a view: what it asks for is asked here, and
+    // answered here with the purse's own answer.
+    void store_command(Player& p, const std::string& text) {
+        if (!tower_defense_mode()) {
+            system_chat("The store stands in a tower defense world.", p.id);
+            return;
+        }
+        if (!p.alive || !p.playing()) {
+            system_chat("Spawn in before you buy.", p.id);
+            return;
+        }
+        const std::string rest =
+            trimmed(lowered(text).substr(text.size() < 5 ? text.size() : 5));
+        if (rest.empty() || rest == "help") {
+            store_category_words(p);
+            return;
+        }
+        const int index = store::find_item(rest.c_str());
+        if (index < 0) {
+            system_chat("No such thing: /buy " + rest, p.id);
+            return;
+        }
+        const store::Item& item = store::kItems[static_cast<size_t>(index)];
+        // Already bought to its cap? An unbought card at the cap is a
+        // consumable, which may always be bought another of.
+        const int have = p.store_level[static_cast<size_t>(index)];
+        if (item.max_level != 255 && have >= static_cast<int>(item.max_level)) {
+            system_chat("Already bought: " + std::string(item.label), p.id);
+            return;
+        }
+        if (item.prereq != store::kNone &&
+            p.store_level[item.prereq] < 1) {
+            system_chat("It needs " + std::string(store::kItems[item.prereq].label) +
+                            " first.", p.id);
+            return;
+        }
+        const int price = store_price(static_cast<int>(index));
+        if (p.zc < price) {
+            system_chat("Not enough Cubes: " + std::to_string(price) + " asked, " +
+                            std::to_string(p.zc) + " in hand.",
+                        p.id);
+            return;
+        }
+        // The store takes its coin first, then asks the effect for a
+        // verdict: a card that cannot be carried out pays nothing back,
+        // it is refused before the purse is touched.
+        if (!store_apply(p, index)) return;
+        p.zc -= price;
+        ++p.store_level[static_cast<size_t>(index)];
+        system_chat(std::string(item.label) + " bought for " + std::to_string(price) +
+                        " Cubes; " + std::to_string(p.zc) + " in hand.", p.id);
+        store_state_send();
+    }
+
+    // The words for what stands in the store, said to one player: the
+    // three sections, and what each offers.
+    void store_category_words(Player& p) {
+        std::string text = "The store's shelves: ";
+        for (int cat = 0; cat < store::kCategoryCount; ++cat) {
+            if (cat) text += ", ";
+            text += std::string(store::category_name(static_cast<uint8_t>(cat))) + " (";
+            bool first = true;
+            for (size_t i = 0; i < store::kItemCount; ++i)
+                if (store::kItems[i].category == cat) {
+                    if (!first) text += " ";
+                    first = false;
+                    text += store::kItems[i].sku;
+                }
+            text += ")";
+        }
+        text += ". Say /buy <name> for one.";
+        system_chat(text, p.id);
+    }
+
+    // The price an item asks, the TOML's word for it when there is one.
+    int store_price(int index) const {
+        if (index < 0 || static_cast<size_t>(index) >= store::kItemCount)
+            return 0;
+        const store::Item& item = store::kItems[static_cast<size_t>(index)];
+        for (const StorePrice& pr : store_prices)
+            if (pr.index == index) return pr.price;
+        return item.price;
+    }
+
+    // The effect carried out. False when it cannot stand - a core at
+    // full health asks for no patch, a gun already carried asks for no
+    // ammo - and the caller refuses the buy without a word of it.
+    bool store_apply(Player& p, int index) {
+        const store::Item& item = store::kItems[static_cast<size_t>(index)];
+        switch (item.effect) {
+            case store::kEffectWeapon: {
+                const int gun = item.arg;
+                if (gun < 0 || gun > 2) return false;
+                if (p.weapon_open[static_cast<size_t>(gun)]) return false;
+                p.weapon_open[static_cast<size_t>(gun)] = true;
+                // The gun goes straight to the hands that bought it.
+                set_weapon(p, gun);
+                return true;
+            }
+            case store::kEffectGunDamage: {
+                const int gun = item.arg;
+                if (gun < 0 || gun > 2) return false;
+                ++p.gun_damage_bonus[static_cast<size_t>(gun)];
+                return true;
+            }
+            case store::kEffectAmmo: {
+                p.gun.restock();
+                p.gun.reset();
+                return true;
+            }
+            case store::kEffectGrenades: {
+                if (p.grenades >= 8) return false;
+                ++p.grenades;
+                return true;
+            }
+            case store::kEffectHealth: {
+                if (p.hp >= 100 + p.max_hp_bonus) return false;
+                p.hp = 100 + p.max_hp_bonus;
+                return true;
+            }
+            case store::kEffectBlocks: {
+                if (p.blocks >= 50) return false;
+                p.blocks = std::min(50, p.blocks + 10);
+                return true;
+            }
+            case store::kEffectMaxHp: {
+                p.max_hp_bonus += static_cast<int>(item.arg);
+                return true;
+            }
+            case store::kEffectSpeed: {
+                p.speed_bonus_pct += static_cast<int>(item.arg);
+                return true;
+            }
+            case store::kEffectCoreRepair: {
+                if (!horde) return false;
+                const int max_hp = horde->config().core_hp;
+                if (horde->core_hp() >= max_hp) return false;
+                const int to = std::min(max_hp, horde->core_hp() +
+                                                   static_cast<int>(item.arg));
+                horde->on_core_damaged(horde->core_hp() - to);
+                return true;
+            }
+            case store::kEffectCoreMaxHp: {
+                if (!horde) return false;
+                horde->add_core_max_hp(static_cast<int>(item.arg));
+                return true;
+            }
+            case store::kEffectTurret: {
+                // The word that places a pillar is the word that asks for
+                // its coin, so its own verdict is the store's: it says
+                // whether one stands where the eye looks, and takes what
+                // it asked. A refusal takes nothing.
+                std::string reply;
+                turret_place(p, static_cast<int>(item.arg), reply);
+                if (reply.rfind("Sentry level", 0) != 0 &&
+                    reply.rfind("The pillar is raised", 0) != 0 &&
+                    reply.rfind("Not yours", 0) != 0)
+                    return false;
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+
     // The builder's own word for a gun: /turret places one of the level
     // the word names, bare /turret the first, and a word that finds a
     // pillar standing raises it instead; /turretremove takes the
@@ -2719,7 +3004,7 @@ struct Server::Impl {
             const int down = turret_remove_owned(p, back);
             system_chat(down > 0
                             ? std::to_string(down) + " sentries taken down; " +
-                                  std::to_string(back) + " credits back, " +
+                                  std::to_string(back) + " Cubes back, " +
                                   std::to_string(p.zc) + " in hand."
                             : "You have no sentries.", p.id);
             return;
@@ -4760,7 +5045,7 @@ struct Server::Impl {
                             continue;
                         o->zc += bonus;
                         system_chat("Wave bonus: +" + std::to_string(bonus) +
-                                    " credits; " + std::to_string(o->zc) +
+                                    " Cubes; " + std::to_string(o->zc) +
                                     " in hand.", o->id);
                     }
                     break;
@@ -5046,6 +5331,12 @@ struct Server::Impl {
                 remember_place(p);
             p.input.holding_gun = p.tool == kToolWeapon;
             p.input.secondary_fire = p.secondary;
+            // Light feet: every step of the store's perk is a tenth of the
+            // pace the same physics runs. The client keeps its own measure
+            // and is never told, so the two must agree - which they do,
+            // because the numbers come from the same table.
+            const float move_scale = 1.0f + 0.1f * static_cast<float>(p.speed_bonus_pct);
+            p.input.move_scale = move_scale;
             const physics::StepResult r = physics::step(phys_map, p.body, p.input, dt);
             p.input.jump = false;
             // The fallen have no fear of falling: a cliff on the map's rim is
@@ -5397,6 +5688,17 @@ struct Server::Impl {
                 br.read_u8();
                 const int w = br.read_u8();
                 if (w > 2) break;
+                // A gun the store has not sold is not a gun this player may
+                // hold: the rifle is always theirs, and the rest are bought
+                // with Cubes one way or another.
+                if (tower_defense_mode() && !p.weapon_open[static_cast<size_t>(w)]) {
+                    const int index = w == 1 ? 1 : 2;   // SMG, Shotgun
+                    system_chat(std::string("Buy the ") +
+                                    store::kItems[static_cast<size_t>(index)].label +
+                                    " in the store first.",
+                                p.id);
+                    break;
+                }
                 set_weapon(p, w);
                 ByteWriter bw;
                 bw.write_u8(static_cast<uint8_t>(PacketId::ChangeWeapon));
@@ -5597,7 +5899,8 @@ struct Server::Impl {
             amount = kMeleeDamage;
         } else {
             if (p.tool != kToolWeapon || p.gun.is_empty(world_time)) return;
-            amount = p.gun.spec().damage[value];
+            // The damage bands the store sold, paid one shot at a time.
+            amount = p.gun.spec().damage[value] + p.gun_damage_bonus[p.gun.type];
         }
         const int kill_type = melee ? kMeleeKill : value == kHead ? kHeadshotKill : kWeaponKill;
         if (victim.aim_bot) {
@@ -6014,7 +6317,7 @@ struct Server::Impl {
                 clear_wave();
             else if ((text == "/money" || text == "/credits") &&
                      tower_defense_mode())
-                system_chat(std::to_string(p.zc) + " credits in hand.", p.id);
+                system_chat(std::to_string(p.zc) + " Cubes in hand.", p.id);
             else if (text.rfind("/pingmark", 0) == 0)
                 ping_mark_command(p, text);
             else if (text.rfind("/pm", 0) == 0)
@@ -6027,12 +6330,16 @@ struct Server::Impl {
                 brute_command(p, text);
             } else if (tower_defense_mode() && text.rfind("/core", 0) == 0) {
                 core_command(p, text);
+            } else if (tower_defense_mode() && text.rfind("/buy", 0) == 0) {
+                store_command(p, text);
+            } else if (tower_defense_mode() && text.rfind("/store", 0) == 0) {
+                store_command(p, text);
             } else if (tower_defense_mode() &&
                        (text == "/va" || text == "/mapadvance")) {
                 map_advance_command(p);
             } else if (tower_defense_mode())
                 system_chat("Commands here: /clearwave, /kill, /turret, "
-                            "/core, /money, /va, /brute", p.id);
+                            "/core, /money, /va, /brute, /buy", p.id);
             else system_chat(aim_mode() ? "Commands here: /restart, /kill"
                                         : "Commands here: /kill", p.id);
             return;

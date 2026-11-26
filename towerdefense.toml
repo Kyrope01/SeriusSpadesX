@@ -29,7 +29,7 @@ damage = [2, 5, 5]
 # single shot is light, its rate is not.
 interval = [0.17, 0.17, 0.066]
 
-# The economy of the tower defense, the Zedcred: a kill pays it, a wave
+# The economy of the tower defense, the Cube: a kill pays it, a wave
 # adds a bonus, a sentry is bought and raised with it. A new gun climbs a
 # flat step by each gun the builder already stands - so the park stays
 # buyable as long as the game runs - and each raising is a fixed price
@@ -38,13 +38,13 @@ interval = [0.17, 0.17, 0.066]
 [economy]
 
 # What a kill of a grunt pays. The specials will ask more.
-zedcred_per_kill = 1
+cubes_per_kill = 3
 
 # The purse a first rise opens.
-zedcred_start = 15
+cubes_start = 25
 
-# A wave cleared pays this plus the number of the wave.
-wave_bonus_base = 10
+# A wave cleared pays this plus twice the number of the wave.
+wave_bonus_base = 20
 
 # The first gun of a builder, before the step.
 turret_price_base = 5
@@ -60,11 +60,42 @@ upgrade2_price = 30
 # taking it down returns.
 turret_refund = 70
 
+# The store: what each card asks in Cubes, differing from the catalogue
+# the server carries when a host says so. Free means free.
+
+[store]
+
+price_rifle = 0
+price_smg = 20
+price_shotgun = 30
+price_rifle_dmg1 = 25
+price_rifle_dmg2 = 40
+price_smg_dmg1 = 30
+price_smg_dmg2 = 45
+price_shotgun_dmg1 = 35
+price_shotgun_dmg2 = 50
+price_ammo = 5
+price_grenades = 6
+price_hp1 = 15
+price_hp2 = 25
+price_hp3 = 40
+price_speed1 = 20
+price_speed2 = 35
+price_health = 8
+price_blocks = 4
+price_repair = 12
+price_core_hp1 = 18
+price_core_hp2 = 30
+price_core_hp3 = 50
+price_turret1 = 5
+price_turret2 = 10
+price_turret3 = 30
+
 # The brutes of the horde, the specials of the waves. Each name reads its
 # own words: the first wave it stands in; the chance by wave and the extra
 # one every so many waves (a brute of the chance), or the pair and trio
 # waves the count of its group grows by (a brute of the count: the tank
-# and the healer); and the Zedcred its kill pays over the grunt rate. The
+# and the healer); and the Cubes its kill pays over the grunt rate. The
 # two bullies of the count stand apart before healer_with_tank_wave: one
 # of them a wave, never both.
 
